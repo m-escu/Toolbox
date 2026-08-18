@@ -1,5 +1,7 @@
 # Toolbox — Sysadmin/IT Power-User Launcher (AutoHotkey v2)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Windows launcher for everyday sysadmin/IT tasks: nested tray/hotkey menus, a type-to-filter command palette, network diagnostics, adapter config, clipboard utilities, and tool integrations (yt-dlp, handle64, WSCC).
 
 ## Hotkeys
