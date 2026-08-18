@@ -1,0 +1,55 @@
+name: lint
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install AutoHotkey v2
+        shell: pwsh
+        run: choco install autohotkey --version 2.0.19 -y --no-progress
+
+      - name: Syntax check (main script)
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "lint"
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item Toolbox.ahk, catalog.json, lib -Destination $tmp -Recurse
+          $check = Join-Path $tmp "check.ahk"
+          Add-Content -Path $check -Value "`nExitApp()" -Encoding utf8
+          $p = Start-Process -FilePath "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" `
+              -ArgumentList "/ErrorStdOut", $check -RedirectStandardOutput "$tmp\out.txt" `
+              -RedirectStandardError "$tmp\err.txt" -PassThru -Wait
+          $text = (Get-Content "$tmp\out.txt", "$tmp\err.txt" -ErrorAction SilentlyContinue) -join "`n"
+          if ($text) { $text | Write-Host; throw "syntax errors found" }
+          Write-Host "syntax OK"
+
+      - name: Smoke tests
+        shell: pwsh
+        run: |
+          $tests = Join-Path $env:RUNNER_TEMP "tests"
+          New-Item -ItemType Directory -Force $tests | Out-Null
+          Copy-Item tests\Smoke.ahk -Destination $tests
+          # tests include ..\lib and ..\catalog.json — stage them one level up
+          $root = Join-Path $env:RUNNER_TEMP "testsroot"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          Copy-Item tests\Smoke.ahk -Destination $root
+          New-Item -ItemType Directory -Force (Join-Path $root "tests") | Out-Null
+          Move-Item (Join-Path $root "Smoke.ahk") (Join-Path $root "tests\Smoke.ahk")
+          Copy-Item lib -Destination $root -Recurse
+          Copy-Item catalog.json -Destination $root
+          $p = Start-Process -FilePath "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" `
+              -ArgumentList "/ErrorStdOut", (Join-Path $root "tests\Smoke.ahk") `
+              -RedirectStandardOutput "$root\out.txt" -RedirectStandardError "$root\err.txt" -PassThru -Wait
+          $text = (Get-Content "$root\out.txt", "$root\err.txt" -ErrorAction SilentlyContinue) -join "`n"
+          if ($text) { $text | Write-Host }
+          $resultsFile = Join-Path $root "tests\smoke-results.txt"
+          if (!(Test-Path $resultsFile)) { throw "smoke results not produced" }
+          $results = Get-Content $resultsFile
+          $results | Write-Host
+          if ($results -match "^FAIL" -or -not ($results -contains "ALL OK")) { throw "smoke tests failed" }

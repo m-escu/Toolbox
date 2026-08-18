@@ -1,0 +1,57 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install AutoHotkey v2
+        shell: pwsh
+        run: choco install autohotkey --version 2.0.19 -y --no-progress
+
+      - name: Read APP_VERSION
+        id: ver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path Toolbox.ahk -Pattern 'APP_VERSION := "([^"]+)"'
+          if (-not $m) { throw "APP_VERSION not found" }
+          $v = $m.Matches[0].Groups[1].Value
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          git fetch --tags --force
+          if (git rev-parse "v$v" 2>$null) { echo "exists=true" >> $env:GITHUB_OUTPUT }
+          else { echo "exists=false" >> $env:GITHUB_OUTPUT }
+
+      - name: Compile + zip
+        if: steps.ver.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          $ahk2exe = "C:\\Program Files\\AutoHotkey\\Compiler\\Ahk2Exe.exe"
+          $base = "C:\\Program Files\\AutoHotkey\\v2\\AutoHotkey64.exe"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & $ahk2exe /in Toolbox.ahk /out dist\\Toolbox.exe /base $base
+          if ($LASTEXITCODE -ne 0) { throw "Ahk2Exe failed" }
+          Copy-Item catalog.json, LICENSE, README.md, CHANGELOG.md, ToolboxFavorites.example.ini dist\\
+          Compress-Archive -Path dist\\* -DestinationPath "Toolbox-v$env:VER.zip" -Force
+
+      - name: Create release
+        if: steps.ver.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          files: Toolbox-v${{ steps.ver.outputs.version }}.zip
+          body: |
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

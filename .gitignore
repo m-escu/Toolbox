@@ -1,0 +1,11 @@
+# shortcuts
+*.lnk
+
+# live config w/ private IPs & MRU data — use ToolboxFavorites.example.ini
+ToolboxFavorites.ini
+
+# local tool binaries
+Tools/
+
+# test output
+tests/smoke-results.txt

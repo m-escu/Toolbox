@@ -1,0 +1,26 @@
+{
+  "tools": [
+    {"name": "Process Explorer", "suite": "Sysinternals", "url": "https://download.sysinternals.com/files/ProcessExplorer.zip", "exes": ["procexp.exe", "procexp64.exe"]},
+    {"name": "Process Monitor", "suite": "Sysinternals", "url": "https://download.sysinternals.com/files/ProcessMonitor.zip", "exes": ["procmon.exe", "procmon64.exe"]},
+    {"name": "Handle", "suite": "Sysinternals", "url": "https://download.sysinternals.com/files/Handle.zip", "exes": ["handle.exe", "handle64.exe"]},
+    {"name": "TCPView", "suite": "Sysinternals", "url": "https://download.sysinternals.com/files/TCPView.zip", "exes": ["tcpview.exe", "tcpview64.exe"]},
+    {"name": "Autoruns", "suite": "Sysinternals", "url": "https://download.sysinternals.com/files/Autoruns.zip", "exes": ["autoruns.exe", "autoruns64.exe"]},
+    {"name": "RAMMap", "suite": "Sysinternals", "url": "https://download.sysinternals.com/files/RAMMap.zip", "exes": ["rammap.exe", "rammap64.exe"]},
+    {"name": "AD Explorer", "suite": "Sysinternals", "url": "https://download.sysinternals.com/files/ADExplorer.zip", "exes": ["ADExplorer.exe", "ADExplorer64.exe"]},
+    {"name": "CurrPorts", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/cports.zip", "exes": ["cports.exe"]},
+    {"name": "WifiInfoView", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/wifiinfoview.zip", "exes": ["WifiInfoView.exe"]},
+    {"name": "HashMyFiles", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/hashmyfiles.zip", "exes": ["HashMyFiles.exe"]},
+    {"name": "PingInfoView", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/pinginfoview.zip", "exes": ["PingInfoView.exe"]},
+    {"name": "LiveTcpUdpWatch", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/livetcpudpwatch.zip", "exes": ["LiveTcpUdpWatch.exe"]},
+    {"name": "WNetWatcher", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/wnetwatcher.zip", "exes": ["WNetWatcher.exe"]},
+    {"name": "BatteryInfoView", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/batteryinfoview.zip", "exes": ["BatteryInfoView.exe"]},
+    {"name": "USBDeview", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/usbdeview.zip", "exes": ["USBDeview.exe"]},
+    {"name": "DriverView", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/driverview.zip", "exes": ["DriverView.exe"]},
+    {"name": "IPNetInfo", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/ipnetinfo.zip", "exes": ["IPNetInfo.exe"]},
+    {"name": "MACAddressView", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/macaddressview.zip", "exes": ["MACAddressView.exe"]},
+    {"name": "NirCmd", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/nircmd.zip", "exes": ["nircmd.exe"]},
+    {"name": "OpenedFilesView", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/openedfilesview.zip", "exes": ["OpenedFilesView.exe"]},
+    {"name": "ShellExView", "suite": "NirSoft", "url": "https://www.nirsoft.net/utils/shellexview.zip", "exes": ["ShellExView.exe"]},
+    {"name": "yt-dlp", "suite": "GitHub", "url": "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", "exes": ["yt-dlp.exe"], "direct": "yt-dlp.exe"}
+  ]
+}
