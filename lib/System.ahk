@@ -191,7 +191,7 @@ SysReduceWorkingSet() {
     if !RequireAdmin("Reduce working set")
         return
     psLines := []
-    psLines.Push('$sig = "[DllImport(\"psapi.dll\")] public static extern int EmptyWorkingSet(IntPtr h);"')
+    psLines.Push("$sig = '[DllImport(`"psapi.dll`")] public static extern int EmptyWorkingSet(IntPtr h);'")
     psLines.Push('$psapi = Add-Type -MemberDefinition $sig -Name PSAPI -Namespace Win32 -PassThru')
     psLines.Push('$before = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB, 2)')
     psLines.Push('$trimmed = 0; $skipped = 0')
