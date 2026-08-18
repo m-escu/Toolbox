@@ -193,13 +193,14 @@ SysReduceWorkingSet() {
     psLines := []
     psLines.Push("$sig = '[DllImport(`"psapi.dll`")] public static extern int EmptyWorkingSet(IntPtr h);'")
     psLines.Push('$psapi = Add-Type -MemberDefinition $sig -Name PSAPI -Namespace Win32 -PassThru')
-    psLines.Push('$before = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB, 2)')
+    psLines.Push("$getAvail = { [math]::Round((Get-Counter `"\Memory\Available MBytes`").CounterSamples.CookedValue/1024, 2) }")
+    psLines.Push('$before = & $getAvail')
     psLines.Push('$trimmed = 0; $skipped = 0')
     psLines.Push('Get-Process | Where-Object { $_.WorkingSet64 -gt 20MB } | ForEach-Object {')
     psLines.Push('    try { if ($psapi::EmptyWorkingSet($_.Handle)) { $trimmed++ } else { $skipped++ } } catch { $skipped++ }')
     psLines.Push('}')
     psLines.Push('Start-Sleep -Seconds 1')
-    psLines.Push('$after = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB, 2)')
+    psLines.Push('$after = & $getAvail')
     psLines.Push('Write-Host ("Trimmed: {0} process(es), skipped: {1} (access denied)" -f $trimmed, $skipped)')
     psLines.Push('Write-Host ("Free RAM: {0} GB -> {1} GB  ({2:+0.00;-0.00} GB)" -f $before, $after, ($after - $before))')
     psScript := ""
