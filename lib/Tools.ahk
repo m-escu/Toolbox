@@ -384,3 +384,140 @@ ToolHandle64() {
         MsgBox(output, "handle64: " fileName, 64)
     }
 }
+
+; ============================================================
+; MANAGE TOOLS — rename / delete / run / reveal INI tool entries
+; ============================================================
+
+; Read all [Tools] entries as {label, exe, path} (compact, gaps removed)
+LoadToolsIni() {
+    global favoritesFile
+    entries := []
+    loop 50 {
+        label := IniRead(favoritesFile, "Tools", "Label" A_Index, "")
+        exe := IniRead(favoritesFile, "Tools", "Exe" A_Index, "")
+        if label = "" || exe = ""
+            continue
+        path := IniRead(favoritesFile, "Tools", "Path" A_Index, "")
+        entries.Push({label: label, exe: exe, path: path})
+    }
+    return entries
+}
+
+; Rewrite [Tools] compactly from an entries array
+SaveToolsIni(entries) {
+    global favoritesFile
+    IniDelete(favoritesFile, "Tools")
+    for i, e in entries {
+        IniWrite(e.label, favoritesFile, "Tools", "Label" i)
+        IniWrite(e.exe, favoritesFile, "Tools", "Exe" i)
+        if e.path != ""
+            IniWrite(e.path, favoritesFile, "Tools", "Path" i)
+    }
+}
+
+; Where an entry resolves + display path
+ToolResolveInfo(exe, customPath) {
+    if customPath != "" && FileExist(customPath)
+        return {src: "custom", path: customPath}
+    localPath := A_ScriptDir "\Tools\" exe
+    if FileExist(localPath)
+        return {src: "Tools\", path: localPath}
+    global wsccCache
+    if wsccCache.Has(StrLower(exe))
+        return {src: "WSCC", path: wsccCache[StrLower(exe)]}
+    return {src: "not found", path: ""}
+}
+
+ToolManageGui() {
+    global favoritesFile
+    entries := LoadToolsIni()
+    dirty := false
+
+    mg := Gui("", "Toolbox — Manage Tools")
+    mg.SetFont("s10", "Segoe UI")
+    mg.OnEvent("Escape", (*) => mg.Destroy())
+    mg.OnEvent("Close", (*) => CloseManage())
+    lv := mg.AddListView("xm w700 h340 -Multi", ["Tool", "Exe", "Source", "Resolved path"])
+    lv.ModifyCol(1, 160), lv.ModifyCol(2, 140), lv.ModifyCol(3, 80), lv.ModifyCol(4, 300)
+
+    RefreshList() {
+        lv.Delete()
+        for , e in entries {
+            ri := ToolResolveInfo(e.exe, e.path)
+            lv.Add(, e.label, e.exe, ri.src, ri.path != "" ? ri.path : "-")
+        }
+    }
+    RefreshList()
+
+    SelectedEntry() {
+        row := lv.GetNext(0)
+        return row = 0 ? "" : entries[row]
+    }
+
+    DoRun(*) {
+        e := SelectedEntry()
+        if e = ""
+            return
+        ri := ToolResolveInfo(e.exe, e.path)
+        if ri.path != ""
+            Run('"' ri.path '"')
+    }
+    DoRename(*) {
+        e := SelectedEntry()
+        if e = ""
+            return
+        nb := TbInputBox("New menu name:", "Rename Tool", "w400 h160", e.label)
+        if nb.Result != "OK" || Trim(nb.Value) = "" || Trim(nb.Value) = e.label
+            return
+        e.label := Trim(nb.Value)
+        dirty := true
+        SaveToolsIni(entries)
+        RefreshList()
+    }
+    DoDelete(*) {
+        e := SelectedEntry()
+        if e = ""
+            return
+        if MsgBox('Delete tool "' e.label '" from the menu?', "Delete Tool", 49) != "OK"
+            return
+        for i, x in entries {
+            if x.label = e.label && x.exe = e.exe {
+                entries.RemoveAt(i)
+                break
+            }
+        }
+        dirty := true
+        SaveToolsIni(entries)
+        RefreshList()
+    }
+    DoReveal(*) {
+        e := SelectedEntry()
+        if e = ""
+            return
+        ri := ToolResolveInfo(e.exe, e.path)
+        if ri.path != ""
+            Run('explorer.exe /select,"' ri.path '"')
+    }
+    DoAdd(*) {
+        mg.Destroy()
+        ToolAddTool()
+    }
+
+    CloseManage(*) {
+        mg.Destroy()
+        if dirty {
+            if MsgBox("Reload Toolbox now to apply the Tools menu changes?", "Manage Tools", 52) = "Yes"
+                Reload()
+        }
+    }
+
+    mg.AddButton("xm y+10 w90 h32", "&Run").OnEvent("Click", DoRun)
+    mg.AddButton("x+8 yp w100 h32", "&Rename...").OnEvent("Click", DoRename)
+    mg.AddButton("x+8 yp w100 h32", "&Delete...").OnEvent("Click", DoDelete)
+    mg.AddButton("x+8 yp w100 h32", "Re&veal").OnEvent("Click", DoReveal)
+    mg.AddButton("x+8 yp w100 h32", "&Add...").OnEvent("Click", DoAdd)
+    mg.AddButton("x+40 yp w100 h32", "Close").OnEvent("Click", CloseManage)
+    ApplyDarkTheme(mg)
+    mg.Show()
+}

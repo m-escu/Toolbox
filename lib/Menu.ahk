@@ -188,6 +188,7 @@ BuildMenus() {
         toolsMenu.Add(suiteName, sm)
     toolsMenu.Add()
     toolsMenu.Add("Add tool...", MakeLogged("Add tool", (*) => ToolAddTool()))
+    toolsMenu.Add("Manage tools...", MakeLogged("Manage tools", (*) => ToolManageGui()))
     toolsMenu.Add("Update tools (versions + download)...", MakeLogged("Update tools", (*) => ToolUpdater()))
     toolsMenu.Add("Browse tool catalog...", MakeLogged("Browse tool catalog", (*) => ToolBrowseCatalog()))
 
