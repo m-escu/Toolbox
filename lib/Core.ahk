@@ -22,8 +22,24 @@ RunCapture(cmd) {
     return output
 }
 
-; Show text output in a temp file opened in N++ (or notepad)
+; Show command output. Reads [Settings] OutputMode:
+;   console (default) — themed OLED window (lib\Console.ahk)
+;   file              — legacy: temp .txt opened in N++/Notepad
+; The signature never changed, so every existing ShowText call site
+; (ARP table, route table, event log errors, adapters, ...) upgrades free.
 ShowText(title, text) {
+    global favoritesFile
+    mode := IniRead(favoritesFile, "Settings", "OutputMode", "console")
+    if (mode = "file") {
+        ShowTextInEditor(title, text)
+        return
+    }
+    ConsoleShow(title, text)
+}
+
+; Legacy output path: write a temp file, open it in N++ (or Notepad).
+; Kept for the "Open in editor" button inside the console + OutputMode=file.
+ShowTextInEditor(title, text) {
     safeName := RegExReplace(title, "[^A-Za-z0-9_-]", "_")
     tmpFile := A_Temp "\toolbox_" safeName ".txt"
     header := title " — " FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss") "`n`n"
@@ -51,9 +67,68 @@ CleanupOldTemp() {
 
 ; Run a temp PS script in a visible window (cleanup happens on next Toolbox start).
 ; noExit=true keeps the window open even if the script crashes (errors stay readable).
-RunTempPsVisible(tmpPs, workDir := "", noExit := false) {
+; title: when set, the spawned console gets themed (window title, bigger
+; character grid, dark palette in dark mode) — see PsConsoleTheme(). The
+; theme lines must run INSIDE PowerShell, so we switch from -File to a
+; -Command wrapper that sets the theme then dot-runs the temp script.
+RunTempPsVisible(tmpPs, workDir := "", noExit := false, title := "") {
     flag := noExit ? " -NoExit" : ""
-    Run('powershell -NoProfile -ExecutionPolicy Bypass' flag ' -File "' tmpPs '"', workDir)
+    if (title != "") {
+        ; We need quote marks as DATA here (the -Command argument is wrapped
+        ; in ", the script path in '). Rather than fighting AHK's ''-escape
+        ; rules with ''' clusters, the quote characters live in variables
+        ; and the command is assembled by plain concatenation. Readable and
+        ; lexer-proof.
+        dq := '"'    ; double quote, as data
+        sq := "'"    ; single quote, as data
+        psPath := StrReplace(tmpPs, sq, sq sq)   ; PS escapes ' by doubling it
+        theme := PsConsoleTheme(title, IsDarkMode())
+        ; Final shape: powershell ... -Command "<theme>;& 'C:\...\script.ps1'"
+        cmd := "powershell -NoProfile -ExecutionPolicy Bypass" flag
+             . " -Command " dq theme "& " sq psPath sq dq
+        Run(cmd, workDir, , &pid)
+        ; Style + center the window without blocking the menu thread
+        SetTimer(() => StyleSpawnedConsole(title), -50)
+    } else {
+        Run('powershell -NoProfile -ExecutionPolicy Bypass' flag ' -File "' tmpPs '"', workDir)
+    }
+}
+
+; One line of PowerShell that themes the console FROM INSIDE the spawned
+; process: window title, larger character grid (110x38, scrollback 3000),
+; and in dark mode a black background + gray text so the whole buffer reads
+; like our OLED console. Both resizes are wrapped in try/catch because
+; conhost rejects sizes bigger than the monitor or current buffer.
+PsConsoleTheme(title, dark) {
+    t := StrReplace(title, "'", "")
+    out := "$Host.UI.RawUI.WindowTitle='Toolbox — " t "';"
+         . "$u=$Host.UI.RawUI;"
+         . "try{$u.WindowSize=New-Object System.Management.Automation.Host.Size(110,38)}catch{};"
+         . "try{$u.BufferSize=New-Object System.Management.Automation.Host.Size(110,3000)}catch{};"
+    if dark
+        out .= "$u.ForegroundColor='Gray';$u.BackgroundColor='Black';Clear-Host;"
+    return out
+}
+
+; Find the console window we just spawned and give it the DWM dark caption
+; + center it. The window only carries our title AFTER the preamble ran, so
+; poll briefly (typically 1-2 tries). Windows Terminal owns its windows
+; under a different window class (and is already dark) — skipped on purpose.
+StyleSpawnedConsole(title) {
+    hwnd := 0
+    loop 10 {
+        hwnd := WinExist("Toolbox — " title " ahk_class ConsoleWindowClass")
+        if hwnd
+            break
+        Sleep(120)
+    }
+    if !hwnd
+        return
+    if IsDarkMode()
+        DwmDarkFrame(hwnd, THEME_BG)
+    WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " hwnd)
+    MonitorGetWorkArea(, &al, &at, &ar, &ab)
+    WinMove(al + (ar - al - ww) // 2, at + (ab - at - wh) // 2, ww, wh, "ahk_id " hwnd)
 }
 
 ; Show a popup menu of items; calls onPick(item) with the chosen string.
@@ -188,8 +263,69 @@ InitDarkBrushes() {
         darkCtlBrush := DllCall("gdi32\CreateSolidBrush", "UInt", 0x2B2B2B, "Ptr")
 }
 
+; ============================================================
+; THEME CONSTANTS — OLED look, one identity for all Toolbox GUIs
+; (mirrors ShellExView Modern: #0D0D0D bg, #60CDFF Win11-blue accent)
+; AHK option strings are RGB ("60CDFF"); Win32 COLORREF is 0x00BBGGRR
+; — convert with BgrOf() before handing values to DllCall.
+; ============================================================
+THEME_BG        := "0D0D0D"   ; window background (OLED black)
+THEME_CTL_BG    := "141416"   ; input controls
+THEME_TEXT      := "E8E8EA"   ; primary text
+THEME_TEXT_DIM  := "9A9AA0"   ; secondary text
+THEME_TEXT_MUTE := "5E5E64"   ; hints / status bar
+THEME_ACCENT    := "60CDFF"   ; Win11 blue accent
+
+; ---- per-control color overrides (used by WM_CTLCOLOR* hooks above) ----
+; Map: control hwnd -> {fg, bk} COLORREFs (BGR). Register via SetCtlColors.
+global gCtlColors := Map()
+; Brush cache: COLORREF -> HBRUSH. Brushes returned from WM_CTLCOLOR* must
+; outlive the message, so they are created once and never deleted.
+global gBrushCache := Map()
+
+; RGB hex string ("60CDFF") -> Win32 COLORREF 0x00BBGGRR (0xFFCD60).
+BgrOf(rgb) {
+    r := Integer("0x" SubStr(rgb, 1, 2))
+    g := Integer("0x" SubStr(rgb, 3, 2))
+    b := Integer("0x" SubStr(rgb, 5, 2))
+    return (b << 16) | (g << 8) | r
+}
+
+; Cached GDI brush for a COLORREF (BGR).
+ThemeBrush(colorref) {
+    global gBrushCache
+    if !gBrushCache.Has(colorref)
+        gBrushCache[colorref] := DllCall("gdi32\CreateSolidBrush", "UInt", colorref, "Ptr")
+    return gBrushCache[colorref]
+}
+
+; Give one control exact fg/bg colors at paint time (BGR COLORREFs).
+; Works for Text, read-only Edit (WM_CTLCOLORSTATIC) and Edit (WM_CTLCOLOREDIT).
+SetCtlColors(hwnd, fg, bk) {
+    global gCtlColors
+    gCtlColors[hwnd] := {fg: fg, bk: bk}
+}
+
+; Register the WM_CTLCOLOR* message hooks exactly once per process.
+EnsureCtlColorHooks() {
+    static done := false
+    if done
+        return
+    OnMessage(0x0138, OnWmCtlColorStatic)  ; WM_CTLCOLORSTATIC
+    OnMessage(0x0133, OnWmCtlColorEdit)    ; WM_CTLCOLOREDIT
+    OnMessage(0x0135, OnWmCtlColorBtn)     ; WM_CTLCOLORBTN
+    done := true
+}
+
 OnWmCtlColorStatic(wParam, lParam, msg, hwnd) {
-    global darkBgBrush
+    global darkBgBrush, gCtlColors
+    ; per-control exact colors win first (registered via SetCtlColors)
+    if gCtlColors.Has(lParam) {
+        c := gCtlColors[lParam]
+        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
+        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
+        return ThemeBrush(c.bk)
+    }
     if !IsDarkMode()
         return
     DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00E0E0E0)
@@ -198,7 +334,13 @@ OnWmCtlColorStatic(wParam, lParam, msg, hwnd) {
 }
 
 OnWmCtlColorEdit(wParam, lParam, msg, hwnd) {
-    global darkCtlBrush
+    global darkCtlBrush, gCtlColors
+    if gCtlColors.Has(lParam) {
+        c := gCtlColors[lParam]
+        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
+        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
+        return ThemeBrush(c.bk)
+    }
     if !IsDarkMode()
         return
     DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00FFFFFF)
@@ -207,7 +349,13 @@ OnWmCtlColorEdit(wParam, lParam, msg, hwnd) {
 }
 
 OnWmCtlColorBtn(wParam, lParam, msg, hwnd) {
-    global darkBgBrush
+    global darkBgBrush, gCtlColors
+    if gCtlColors.Has(lParam) {
+        c := gCtlColors[lParam]
+        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
+        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
+        return ThemeBrush(c.bk)
+    }
     if !IsDarkMode()
         return
     DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00FFFFFF)
@@ -215,34 +363,36 @@ OnWmCtlColorBtn(wParam, lParam, msg, hwnd) {
     return darkBgBrush
 }
 
-ApplyDarkTheme(guiObj) {
+; DWM dark title bar + caption color for ANY top-level window — our Gui
+; windows AND spawned console windows (conhost) alike. bgHex: RGB string.
+; Attrs: 20/19 = immersive dark mode (Win11+/older Win10), 35 = caption
+; color, 36 = caption text color. Final SetWindowPos forces a frame redraw.
+DwmDarkFrame(hwnd, bgHex := "1F1F1F") {
+    isDark := Buffer(4, 0)
+    NumPut("Int", 1, isDark)
+    DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "UInt", 20, "Ptr", isDark.Ptr, "UInt", 4)
+    DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "UInt", 19, "Ptr", isDark.Ptr, "UInt", 4)
+    captionColor := Buffer(4, 0)
+    NumPut("UInt", BgrOf(bgHex), captionColor)
+    DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "UInt", 35, "Ptr", captionColor.Ptr, "UInt", 4)
+    textColor := Buffer(4, 0)
+    NumPut("UInt", 0x00FFFFFF, textColor)
+    DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", hwnd, "UInt", 36, "Ptr", textColor.Ptr, "UInt", 4)
+    DllCall("user32\SetWindowPos", "Ptr", hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x0027) ; SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED
+}
+
+; bgColor: optional RGB string ("0D0D0D") to override the default #1F1F1F
+; window + caption color — used by the OLED console and future themed GUIs.
+ApplyDarkTheme(guiObj, bgColor := "") {
     if !IsDarkMode()
         return
     InitDarkBrushes()
-    guiObj.BackColor := "1F1F1F"
-    if guiObj.Hwnd {
-        isDark := Buffer(4, 0)
-        NumPut("Int", 1, isDark)
-        ; DWMWA_USE_IMMERSIVE_DARK_MODE (Win11 / Win10 20H1+ = 20, Win10 1809-1909 = 19)
-        DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 20, "Ptr", isDark.Ptr, "UInt", 4)
-        DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 19, "Ptr", isDark.Ptr, "UInt", 4)
-        ; DWMWA_CAPTION_COLOR (35) -> #1F1F1F, DWMWA_TEXT_COLOR (36) -> #FFFFFF (BGR format: 0x001F1F1F / 0x00FFFFFF)
-        captionColor := Buffer(4, 0)
-        NumPut("UInt", 0x001F1F1F, captionColor)
-        DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 35, "Ptr", captionColor.Ptr, "UInt", 4)
-        textColor := Buffer(4, 0)
-        NumPut("UInt", 0x00FFFFFF, textColor)
-        DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", guiObj.Hwnd, "UInt", 36, "Ptr", textColor.Ptr, "UInt", 4)
-        ; Force frame redraw
-        DllCall("user32\SetWindowPos", "Ptr", guiObj.Hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x0027) ; SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED
-    }
-    static msgsHooked := false
-    if !msgsHooked {
-        OnMessage(0x0138, OnWmCtlColorStatic)  ; WM_CTLCOLORSTATIC
-        OnMessage(0x0133, OnWmCtlColorEdit)    ; WM_CTLCOLOREDIT
-        OnMessage(0x0135, OnWmCtlColorBtn)     ; WM_CTLCOLORBTN
-        msgsHooked := true
-    }
+    if (bgColor = "")
+        bgColor := "1F1F1F"
+    guiObj.BackColor := bgColor
+    if guiObj.Hwnd
+        DwmDarkFrame(guiObj.Hwnd, bgColor)
+    EnsureCtlColorHooks()
     for , ctrl in guiObj {
         try {
             cType := ctrl.Type

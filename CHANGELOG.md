@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+- Output console: `ShowText` now opens a themed OLED window (`lib/Console.ahk`) — Consolas body, accent-bar header with timestamp + line count, Copy / Open in editor / Close buttons, live status line, resizable; dark caption + per-control colors via new WM_CTLCOLOR override map
+- New INI key `[Settings] OutputMode` — `console` (default) or `file` to restore the temp-text-file behavior
+- Core: `ApplyDarkTheme(gui, bgColor)` accepts a background override; theme constants (`THEME_BG`, `THEME_ACCENT`, ...) shared for future restyling
+- Fix: console Size callback signature — the Size event passes 4 parameters (Gui, MinMax, Width, Height); the previous 3-parameter callback threw "Invalid callback function." on resize and prevented the layout reflow
+- Console opens at ~85% of the work-area height (was fixed 520 px) and no longer select-all's its content on open
+- Spawned PowerShell consoles (Port check, Wake-on-LAN, Subnet scanner, Speed test) now get the themed treatment: Toolbox window title, 110×38 grid with 3000-line scrollback, black bg + gray text in dark mode, DWM dark caption and centered on the work area (classic conhost only — Windows Terminal manages its own look)
+
 ## v1.2.1
 - Custom toolbox tray icons (square handle, UAC shield badge when elevated)
 - Networking: internet speed test — Cloudflare primary, OVH/httpbin fallbacks, dynamic payload sizing via probes, crash-safe window

@@ -242,7 +242,7 @@ NetPortCheck() {
 
     tmpPs := WriteTempPs("toolbox_portcheck.ps1", psLines)
     try {
-        RunTempPsVisible(tmpPs)
+        RunTempPsVisible(tmpPs, "", false, "Port Check")
     } catch as err {
         ; Fallback: open a cmd window and run Test-NetConnection instead
         for t in targets
@@ -373,7 +373,7 @@ NetWakeOnLan() {
 
     tmpPs := WriteTempPs("toolbox_wol.ps1", psCmd)
     try {
-        RunTempPsVisible(tmpPs)
+        RunTempPsVisible(tmpPs, "", false, "Wake-on-LAN")
         ToolTip("WOL magic packet sent to " mac)
         SetTimer(() => ToolTip(), -2000)
     } catch as err {
@@ -453,7 +453,7 @@ NetIpScanner() {
     for , line in psLines
         psScript .= line "`n"
     tmpPs := WriteTempPs("toolbox_scan.ps1", psScript)
-    RunTempPsVisible(tmpPs)
+    RunTempPsVisible(tmpPs, "", false, "Subnet Scanner")
 }
 
 ; --- Subnet calculator ---
@@ -610,5 +610,5 @@ NetSpeedTest() {
     for , line in psLines
         psScript .= line "`n"
     tmpPs := WriteTempPs("toolbox_speedtest.ps1", psScript)
-    RunTempPsVisible(tmpPs, "", true)  ; -NoExit: window stays open even on crash
+    RunTempPsVisible(tmpPs, "", true, "Internet Speed Test")  ; -NoExit: window stays open even on crash
 }
