@@ -7,6 +7,7 @@
 #Include ..\lib\Config.ahk
 #Include ..\lib\Recent.ahk
 #Include ..\lib\Core.ahk
+#Include ..\lib\Console.ahk
 #Include ..\lib\Updater.ahk
 #Include ..\lib\Files.ahk
 #Include ..\lib\Network.ahk
