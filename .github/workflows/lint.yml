@@ -7,7 +7,7 @@ on:
 jobs:
   check:
     runs-on: windows-latest
-    timeout-minutes: 6   ; smoke tests ~30s; a hang = MsgBox blocking (fails the job instead of burning 10 min)
+    timeout-minutes: 6 # smoke ~30s; a hang (blocking MsgBox) fails the job instead of burning 10 min
     steps:
       - uses: actions/checkout@v4
 
