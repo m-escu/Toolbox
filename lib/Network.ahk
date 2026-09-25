@@ -612,3 +612,159 @@ NetSpeedTest() {
     tmpPs := WriteTempPs("toolbox_speedtest.ps1", psScript)
     RunTempPsVisible(tmpPs, "", true, "Internet Speed Test")  ; -NoExit: window stays open even on crash
 }
+
+; ============================================================
+; PS-BASED INFO TOOLS
+; One recipe, many tools: build a small PowerShell script in an
+; array, run it hidden with PsCapture(), show the text in the
+; themed output console via ShowText(). Nothing is written to
+; disk except the temp .ps1 (auto-deleted after the run).
+;
+; Quoting cheat-sheet for the psLines below (see also STEP1-NOTES):
+;   - PS double quotes " sit happily inside AHK '...' strings
+;   - PS single quotes ' must be DOUBLED inside AHK '...' — better:
+;     put the quote character in a variable (sq := "'") and
+;     concatenate, like RunTempPsVisible does. Never stack '''.
+;   - keep PS output ASCII-only: PS 5.1 reads no-BOM .ps1 files
+;     as ANSI, so accented chars in the script would garble.
+; ============================================================
+
+; --- Show DNS cache (which names did this PC resolve recently?) ---
+NetDnsCache() {
+    psLines := []
+    psLines.Push('$c = Get-DnsClientCache -ErrorAction SilentlyContinue')
+    psLines.Push('if (-not $c) { Write-Host "DNS cache is empty."; exit }')
+    psLines.Push('$c | Sort-Object Entry | Select-Object Entry, Data, Type, TimeToLive |')
+    psLines.Push('    Format-Table -AutoSize | Out-String -Width 160')
+    psLines.Push('Write-Host ""')
+    psLines.Push('Write-Host ("{0} entrie(s) in the DNS cache." -f ($c | Measure-Object).Count)')
+    ShowText("DNS Cache", PsCapture(psLines, "dnscache"))
+}
+
+; --- Show current Wi-Fi connection details (SSID, channel, speed) ---
+NetWifiDetails() {
+    output := RunCapture("netsh wlan show interfaces")
+    ShowText("Wi-Fi Connection Details", output)
+}
+
+; --- Show Wi-Fi networks in range (SSID, signal, BSSID/channels) ---
+NetWifiNetworks() {
+    output := RunCapture("netsh wlan show networks mode=bssid")
+    ShowText("Wi-Fi Networks In Range", output)
+}
+
+; --- Show saved Wi-Fi profiles AND their plaintext passwords ---
+; netsh only reveals keys to an elevated prompt, hence RequireAdmin.
+; "Key Content" is the EN label of the password line; on non-English
+; Windows we fall back to dumping the whole profile block so the key
+; can still be found by eye.
+NetWifiPasswords() {
+    if !RequireAdmin("Wi-Fi profiles & passwords")
+        return
+    psLines := []
+    ; Locale-proof profile names: every profile line is 4+ spaces
+    ; indented and ends in " : <NAME>", whatever the label language is.
+    psLines.Push('$names = @()')
+    psLines.Push('foreach ($l in (netsh wlan show profiles)) {')
+    psLines.Push('  if ($l -match "^\s{4,}.*\s:\s(.+?)\s*$") { $names += $Matches[1] }')
+    psLines.Push('}')
+    psLines.Push('$names = $names | Select-Object -Unique')
+    psLines.Push('if (-not $names) { Write-Host "No Wi-Fi profiles found."; exit }')
+    psLines.Push('foreach ($n in $names) {')
+    psLines.Push('  Write-Host ("PROFILE: " + $n)')
+    psLines.Push('  $detail = netsh wlan show profile name="$n" key=clear')
+    psLines.Push('  $key = ""')
+    psLines.Push('  foreach ($d in $detail) {')
+    psLines.Push('    if ($d -match "Key Content\s*:\s*(.+?)\s*$") { $key = $Matches[1] }')
+    psLines.Push('  }')
+    psLines.Push('  if ($key) { Write-Host ("  password: " + $key) }')
+    psLines.Push('  else { $detail | ForEach-Object { Write-Host ("  " + $_) } }')
+    psLines.Push('  Write-Host ""')
+    psLines.Push('}')
+    ShowText("Wi-Fi Profiles & Passwords", PsCapture(psLines, "wifipw"))
+}
+
+; --- Show TCP ports that are listening + the process that owns them ---
+NetListeningPorts() {
+    psLines := []
+    psLines.Push('$rows = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object {')
+    psLines.Push('  $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue')
+    psLines.Push('  [PSCustomObject]@{ Port = $_.LocalPort; Address = $_.LocalAddress; PID = $_.OwningProcess;')
+    psLines.Push('                   Process = $(if ($p) { $p.ProcessName } else { "?" }) }')
+    psLines.Push('}')
+    psLines.Push('$rows | Sort-Object Port, Address | Format-Table -AutoSize | Out-String -Width 120')
+    psLines.Push('Write-Host ""')
+    psLines.Push('Write-Host "Tip: system services may show as ? unless Toolbox runs as admin."')
+    ShowText("Listening Ports (TCP)", PsCapture(psLines, "ports"))
+}
+
+; --- Show folders this PC shares on the network (SMB) ---
+NetSmbShares() {
+    psLines := []
+    psLines.Push('$s = Get-SmbShare -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne "IPC$" }')
+    psLines.Push('if (-not $s) {')
+    psLines.Push('  Write-Host "No shared folders found (or access denied - run Toolbox as admin)."')
+    psLines.Push('  exit')
+    psLines.Push('}')
+    psLines.Push('$s | Select-Object Name, Path, Description | Format-Table -AutoSize | Out-String -Width 200')
+    ShowText("Shared Folders (SMB)", PsCapture(psLines, "smb"))
+}
+
+; --- Show public IP / ISP and copy the IP to the clipboard ---
+NetPublicIp() {
+    psLines := []
+    psLines.Push('try {')
+    psLines.Push('  $m = Invoke-RestMethod "https://ipinfo.io/json" -TimeoutSec 8')
+    psLines.Push('  Write-Host ("IP:      {0}" -f $m.ip)')
+    psLines.Push('  Write-Host ("ISP:     {0}" -f $m.org)')
+    psLines.Push('  Write-Host ("City:    {0}, {1}, {2}" -f $m.city, $m.region, $m.country)')
+    psLines.Push('} catch { Write-Host ("Lookup failed: " + $_.Exception.Message) }')
+    output := PsCapture(psLines, "publicip")
+    if RegExMatch(output, "IP:\s+(\S+)", &m) {
+        A_Clipboard := Trim(m[1])
+        ToolTip("IP copied to clipboard")
+        SetTimer(() => ToolTip(), -1500)
+    }
+    ShowText("Public IP", output)
+}
+
+; --- Test a website: HTTP status code + response time ---
+NetTestWebsite() {
+    ; Pre-fill the box from the clipboard when it looks like a URL
+    clip := Trim(A_Clipboard)
+    defUrl := RegExMatch(clip, "i)^https?://\S+$") ? clip : ""
+    input := TbInputBox("URL to test:`n(bare domains get https:// added)", "Test Website", "w450 h170", defUrl)
+    if input.Result != "OK" || Trim(input.Value) = ""
+        return
+    url := Trim(input.Value)
+    if !RegExMatch(url, "i)^https?://")
+        url := "https://" url
+    ; Quote chars as data — see the cheat-sheet above
+    sq := "'"
+    psLines := []
+    psLines.Push('$u = ' sq StrReplace(url, sq, sq sq) sq)
+    psLines.Push('$sw = [System.Diagnostics.Stopwatch]::StartNew()')
+    psLines.Push('try {')
+    psLines.Push('  $r = Invoke-WebRequest -Uri $u -Method GET -UseBasicParsing -TimeoutSec 15')
+    psLines.Push('  $sw.Stop()')
+    psLines.Push('  Write-Host ("{0} -> HTTP {1} {2}  ({3:N0} ms)" -f $u, [int]$r.StatusCode, $r.StatusDescription, $sw.Elapsed.TotalMilliseconds)')
+    psLines.Push('} catch {')
+    psLines.Push('  $sw.Stop()')
+    psLines.Push('  $code = $null')
+    psLines.Push('  try { $code = [int]$_.Exception.Response.StatusCode } catch {}')
+    psLines.Push('  if ($code) { Write-Host ("{0} -> HTTP {1}  ({2:N0} ms)" -f $u, $code, $sw.Elapsed.TotalMilliseconds) }')
+    psLines.Push('  else { Write-Host ("{0} -> FAILED: {1}" -f $u, $_.Exception.Message) }')
+    psLines.Push('}')
+    ShowText("Website Test", PsCapture(psLines, "webtest"))
+}
+
+; --- Show the hosts file (static name overrides) ---
+NetHostsFile() {
+    hostsPath := A_WinDir "\System32\drivers\etc\hosts"
+    if !FileExist(hostsPath) {
+        MsgBox("Hosts file not found at:`n" hostsPath, "Hosts File", 48)
+        return
+    }
+    content := FileRead(hostsPath, "UTF-8")
+    ShowText("Hosts File (" hostsPath ")", content)
+}

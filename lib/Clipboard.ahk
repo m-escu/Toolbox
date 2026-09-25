@@ -244,3 +244,44 @@ ClipCountStats() {
     MsgBox("Clipboard Statistics:`n`n  Lines:   " lines "`n  Words:   " words "`n  Chars:   " chars, "Clipboard Stats", 64)
 }
 
+; --- SHA-256 hash of the clipboard text (result copied to clipboard) ---
+; The text is written to a temp file and Get-FileHash hashes that exact
+; byte stream — this avoids newline-encoding surprises and matches what
+; any other SHA-256 tool would report for the same content.
+ClipHashText() {
+    if A_Clipboard = "" {
+        ToolTip("Clipboard is empty.")
+        SetTimer(() => ToolTip(), -2000)
+        return
+    }
+    tmpFile := A_Temp "\toolbox_cliphash.txt"
+    Try FileDelete(tmpFile)
+    FileAppend(A_Clipboard, tmpFile, "UTF-8-RAW")
+    ; Quote chars as data — the -Command argument is wrapped in ", the
+    ; file path in ' (same lexer-proof pattern as RunTempPsVisible).
+    dq := '"'
+    sq := "'"
+    cmd := "powershell -NoProfile -Command " dq "(Get-FileHash -LiteralPath " sq StrReplace(tmpFile, sq, sq sq) sq " -Algorithm SHA256).Hash" dq
+    hash := Trim(RunCapture(cmd))
+    Try FileDelete(tmpFile)
+    if !RegExMatch(hash, "i)^[0-9A-F]{64}$") {
+        MsgBox("Hash failed:`n" hash, "Clipboard Hash", 48)
+        return
+    }
+    A_Clipboard := hash
+    ToolTip("SHA-256 copied: " SubStr(hash, 1, 24) "...")
+    SetTimer(() => ToolTip(), -3000)
+}
+
+; --- Generate a random GUID (v4) and copy it ---
+ClipNewGuid() {
+    g := Trim(RunCapture('powershell -NoProfile -Command "[guid]::NewGuid().ToString()"'))
+    if RegExMatch(g, "i)^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$") {
+        A_Clipboard := g
+        ToolTip("GUID copied: " g)
+        SetTimer(() => ToolTip(), -2500)
+    } else {
+        MsgBox("Could not generate a GUID:`n" g, "Generate GUID", 48)
+    }
+}
+

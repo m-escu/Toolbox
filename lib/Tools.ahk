@@ -521,3 +521,80 @@ ToolManageGui() {
     ApplyDarkTheme(mg)
     mg.Show()
 }
+
+; ============================================================
+; PS-BASED UTILITY TOOLS (file hash, password generator)
+; ============================================================
+
+; --- Hash a file (SHA-256 / SHA-1 / MD5), result copied to clipboard ---
+ToolHashFile() {
+    filePath := FileSelect(1, , "Select file to hash")   ; option 1 = file must exist
+    if filePath = ""
+        return
+    ShowPickMenu(["SHA-256", "SHA-1", "MD5"], (algo) => DoHashFile(filePath, algo))
+}
+
+DoHashFile(filePath, algo) {
+    ; Get-FileHash wants the algorithm without the dash: SHA256 / SHA1 / MD5
+    psAlgo := StrReplace(algo, "-", "")
+    dq := '"'
+    sq := "'"
+    cmd := "powershell -NoProfile -Command " dq "(Get-FileHash -LiteralPath " sq StrReplace(filePath, sq, sq sq) sq " -Algorithm " psAlgo ").Hash" dq
+    hash := Trim(RunCapture(cmd))
+    if RegExMatch(hash, "i)^[0-9A-F]{32,64}$") {
+        A_Clipboard := hash
+        MsgBox("File:  " filePath "`nAlgo:  " algo "`nHash:  " hash "`n`n(Hash copied to clipboard)", "File Hash — " algo, 64)
+    } else {
+        MsgBox("Hash failed:`n" hash, "File Hash", 48)
+    }
+}
+
+; --- Random password generator (crypto RNG, lookalike chars excluded) ---
+ToolPasswordGen() {
+    input := TbInputBox("Password length (8-64):", "Password Generator", "w350 h150", "20")
+    if input.Result != "OK" || Trim(input.Value) = ""
+        return
+    if !RegExMatch(Trim(input.Value), "^\d+$") {
+        MsgBox("Please enter a number between 8 and 64.", "Password Generator", 48)
+        return
+    }
+    len := Integer(Trim(input.Value))
+    if len < 8 || len > 64 {
+        MsgBox("Length must be between 8 and 64.", "Password Generator", 48)
+        return
+    }
+    ShowPickMenu([
+        "Letters + digits + symbols",
+        "Letters + digits",
+        "Hex (0-9, A-F)"
+    ], (preset) => DoPasswordGen(len, preset))
+}
+
+DoPasswordGen(len, preset) {
+    ; Charsets deliberately skip lookalikes (0/O, 1/l/I) for readability
+    abc := (preset = "Hex (0-9, A-F)")
+        ? "0123456789ABCDEF"
+        : (preset = "Letters + digits")
+            ? "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+            : "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*+-_"
+    sq := "'"
+    psLines := []
+    psLines.Push('$abc = ' sq abc sq)
+    psLines.Push('$len = ' len)
+    psLines.Push('$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()')
+    psLines.Push('$out = New-Object System.Text.StringBuilder')
+    psLines.Push('for ($i = 0; $i -lt $len; $i++) {')
+    psLines.Push('  $b = New-Object byte[] 4')
+    psLines.Push('  $rng.GetBytes($b)')
+    psLines.Push('  $idx = [BitConverter]::ToUInt32($b, 0) % $abc.Length')
+    psLines.Push('  [void]$out.Append($abc[$idx])')
+    psLines.Push('}')
+    psLines.Push('$out.ToString()')
+    pw := Trim(PsCapture(psLines, "pwgen"))
+    if pw = "" {
+        MsgBox("Password generation failed.", "Password Generator", 48)
+        return
+    }
+    A_Clipboard := pw
+    MsgBox("Password:  " pw "`n`n(Copied to clipboard)", "Password Generator", 64)
+}

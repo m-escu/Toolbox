@@ -59,6 +59,27 @@ WriteTempPs(name, content) {
     return tmpPs
 }
 
+; The standard pattern for all the new "show me info" tools:
+;   1. build an array of PowerShell lines   psLines := [] / psLines.Push('...')
+;   2. run it hidden and capture stdout     output := PsCapture(psLines, "name")
+;   3. display it                           ShowText("Title", output)  -> themed console
+; Steps 1-2 used to be copy-pasted 6 lines per tool; this helper does the
+; join + write + run + capture + cleanup in one call. The static runCount
+; makes every temp file unique, so two tools can run at the same time
+; without overwriting each other's .ps1 (CleanupOldTemp removes leftovers
+; on the next Toolbox start).
+PsCapture(psLines, name := "ps") {
+    static runCount := 0
+    runCount += 1
+    psScript := ""
+    for , line in psLines
+        psScript .= line "`n"
+    tmpPs := WriteTempPs("toolbox_" name runCount ".ps1", psScript)
+    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
+    Try FileDelete(tmpPs)
+    return output
+}
+
 ; Remove leftover toolbox_* temp files from previous runs
 CleanupOldTemp() {
     Loop Files A_Temp "\toolbox_*.*"
