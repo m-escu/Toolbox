@@ -105,7 +105,8 @@ ShowMenuEditor() {
         if !row || row > allModels[ddlSection.Text].Length
             return
         it := allModels[ddlSection.Text][row]
-        if it.kind = "sep"
+        ; separators and submenus are read-only in the editor
+        if it.kind != "item"
             return
         edLabel.Value := it.label
         edTarget.Value := (SubStr(it.action, 1, 4) = "run:") ? SubStr(it.action, 5) : it.action
@@ -154,6 +155,11 @@ ShowMenuEditor() {
 
     UpdateItem() {
         row := lv.GetNext()
+        if row && row <= allModels[ddlSection.Text].Length && allModels[ddlSection.Text][row].kind != "item" {
+            ToolTip("Separators and submenus can't be edited — reorder or remove them instead.")
+            SetTimer(() => ToolTip(), -3000)
+            return
+        }
         it := ItemFromFields()
         if !row || !it {
             ToolTip("Select a row and fill in the fields.")
