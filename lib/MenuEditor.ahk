@@ -31,9 +31,13 @@ ShowMenuEditor() {
 
     g.AddText("x12 y330", "Label:")
     edLabel := g.AddEdit("x60 y326 w310")
-    g.AddText("x390 y330", "Target:")
-    cbTarget := g.AddComboBox("x440 y326 w190", GetRegisteredCommandNames())
-    g.AddButton("x640 y325 w80", "Browse...").OnEvent("Click", (*) => BrowseMenuTarget(cbTarget))
+    g.AddText("x390 y330", "Target (type to filter):")
+    allTargets := GetRegisteredCommandNames()
+    edTarget := g.AddEdit("x440 y326 w190")
+    lbTargets := g.AddListBox("x440 y+4 w190 r6")
+    edTarget.OnEvent("Change", (*) => FilterTargets())
+    lbTargets.OnEvent("DoubleClick", (ctl, row) => PickTarget(row))
+    g.AddButton("x640 y325 w80", "Browse...").OnEvent("Click", (*) => BrowseMenuTarget(edTarget))
     g.AddText("x12 y364 w640", "Target = menu command (dropdown), file/exe (Browse), or raw command line. Blank label + target = new item.")
 
     btnUp := g.AddButton("x12 y396 w80", "Up")
@@ -59,7 +63,20 @@ ShowMenuEditor() {
     lv.OnEvent("DoubleClick", (ctl, row) => LoadRow(row))
     g.OnEvent("Escape", (*) => g.Destroy())
     ApplyDarkTheme(g, THEME_BG)
-    DarkComboBox(cbTarget)
+
+    ; type-to-filter over registered commands; free text stays free
+    FilterTargets() {
+        q := edTarget.Value
+        lbTargets.Delete()
+        for name in allTargets
+            if (q = "" || InStr(name, q))  ; case-insensitive substring match
+                lbTargets.Add([name])
+    }
+
+    PickTarget(row) {
+        if row
+            edTarget.Value := lbTargets.GetText(row)
+    }
 
     LoadSection(sec) {
         lv.Delete()
@@ -89,12 +106,13 @@ ShowMenuEditor() {
         if it.kind = "sep"
             return
         edLabel.Value := it.label
-        cbTarget.Text := (SubStr(it.action, 1, 4) = "run:") ? SubStr(it.action, 5) : it.action
+        edTarget.Value := (SubStr(it.action, 1, 4) = "run:") ? SubStr(it.action, 5) : it.action
+        FilterTargets()
     }
 
     ; parse fields into an item ("" target invalid)
     ItemFromFields() {
-        label := Trim(edLabel.Value), target := Trim(cbTarget.Text)
+        label := Trim(edLabel.Value), target := Trim(edTarget.Value)
         if target = ""
             return ""
         if label = ""
@@ -194,8 +212,8 @@ ShowMenuEditor() {
     g.Show()
 }
 
-BrowseMenuTarget(cbTarget) {
+BrowseMenuTarget(edTarget) {
     f := FileSelect(1, , "Pick program or file to launch", "Programs and files (*.exe; *.bat; *.cmd; *.ps1; *.lnk; *.msc; *.cpl)|*.exe;*.bat;*.cmd;*.ps1;*.lnk;*.msc;*.cpl|All files (*.*)|*.*")
     if f != ""
-        cbTarget.Text := '"' f '"'
+        edTarget.Value := '"' f '"'
 }

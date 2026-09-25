@@ -41,12 +41,14 @@ ShowHotkeyEditor() {
     lv.ModifyCol(1, 150), lv.ModifyCol(2, 390)
     g.AddText("ym x590 Section", "Hotkey (e.g. Ctrl+Alt+G):")
     edHK := g.AddEdit("ys w190")
-    g.AddText("xs Section", "Target:")
+    g.AddText("xs Section", "Target (type to filter):")
     allTargets := GetRegisteredCommandNames()
-    cbTarget := g.AddComboBox("ys w270", allTargets)
-    cbTarget.OnEvent("Change", (*) => FilterTargets())
+    edTarget := g.AddEdit("xp y+4 w270")
+    lbTargets := g.AddListBox("xp y+4 w270 r8")
+    edTarget.OnEvent("Change", (*) => FilterTargets())
+    lbTargets.OnEvent("DoubleClick", (ctl, row) => PickTarget(row))
     g.AddButton("xp+280 yp w60", "Browse...").OnEvent("Click", (*) => BrowseTarget())
-    g.AddText("xs w480", "Target = a command from the dropdown (menu command), a file/exe picked via Browse, or any raw command line.")
+    g.AddText("xs w480", "Target = a command from the list (double-click), a file/exe picked via Browse, or any raw command line.")
     btnAdd := g.AddButton("xm ym+300 w110", "Add / Update")
     btnDel := g.AddButton("xp+120 wp", "Delete")
     btnDel.OnEvent("Click", (*) => DeleteSelected())
@@ -58,41 +60,38 @@ ShowHotkeyEditor() {
     lv.OnEvent("Click", (ctl, row) => LoadRow(row))
     g.OnEvent("Escape", (*) => g.Destroy())
     ApplyDarkTheme(g, THEME_BG)
-    DarkComboBox(cbTarget)
 
     ; type-to-filter over registered commands; free text stays free
     FilterTargets() {
-        static busy := false
-        if busy
-            return
-        busy := true
-        q := cbTarget.Text
-        cbTarget.Delete()
+        q := edTarget.Value
+        lbTargets.Delete()
         for name in allTargets
             if (q = "" || InStr(name, q))  ; case-insensitive substring match
-                cbTarget.Add([name])
-        cbTarget.Text := q  ; rebuilding the list clears the edit text — restore it
-        ; caret to end of typed text (LOWORD=start, HIWORD=end of selection)
-        SendMessage(0x01B4, 0, (StrLen(q) << 16) | StrLen(q), cbTarget.Hwnd)  ; CB_SETEDITSEL
-        busy := false
+                lbTargets.Add([name])
+    }
+
+    PickTarget(row) {
+        if row
+            edTarget.Value := lbTargets.GetText(row)
     }
 
     LoadRow(row) {
         if !row
             return
         edHK.Value := lv.GetText(row, 1)
-        cbTarget.Text := lv.GetText(row, 2)
+        edTarget.Value := lv.GetText(row, 2)
+        FilterTargets()
     }
 
     BrowseTarget() {
         f := FileSelect(1, , "Pick program or file to launch", "Programs and files (*.exe; *.bat; *.cmd; *.ps1; *.lnk; *.msc; *.cpl)|*.exe;*.bat;*.cmd;*.ps1;*.lnk;*.msc;*.cpl|All files (*.*)|*.*")
         if f = ""
             return
-        cbTarget.Text := '"' f '"'
+        edTarget.Value := '"' f '"'
     }
 
     AddOrUpdate() {
-        hk := Trim(edHK.Value), target := Trim(cbTarget.Text)
+        hk := Trim(edHK.Value), target := Trim(edTarget.Value)
         if hk = "" || target = "" {
             ToolTip("Both hotkey and target are required.")
             SetTimer(() => ToolTip(), -3000)
@@ -190,24 +189,6 @@ GetRegisteredCommandNames() {
 
 ; Dark-theme the dropdown list + edit part of a ComboBox (ApplyDarkTheme
 ; only styles the closed control; the dropped list stays light otherwise).
-DarkComboBox(cb) {
-    ; COMBOBOXINFO x64 (size 72): cbSize(0) pad(4) rcItem(8) rcButton(24)
-    ; stateButton(40) pad(44) hwndList(48) hwndItem(56, = edit part) hwndButton(64)
-    cbInfo := Buffer(72, 0)
-    NumPut("UInt", cbInfo.Size, cbInfo, 0)
-    DllCall("user32\GetComboBoxInfo", "Ptr", cb.Hwnd, "Ptr", cbInfo)
-    hwndList := NumGet(cbInfo, 48, "Ptr")
-    hwndEdit := NumGet(cbInfo, 56, "Ptr")
-    if hwndList
-        DllCall("uxtheme\SetWindowTheme", "Ptr", hwndList, "WStr", "DarkMode_Explorer", "Ptr", 0)
-    if hwndEdit
-        DllCall("uxtheme\SetWindowTheme", "Ptr", hwndEdit, "WStr", "DarkMode_Explorer", "Ptr", 0)
-    if hwndList {
-        SendMessage(0x0200, 0, 0x00202020, hwndList)  ; LB_SETBKCOLOR dark bg
-        SendMessage(0x0201, 0, 0x00E8E8EA, hwndList)  ; LB_SETTEXTCOLOR light text
-    }
-}
-
 ; AHK hotkey syntax (^!t) -> friendly display (Ctrl+Alt+T)
 HkToFriendly(hk) {
     hk := Trim(hk)
