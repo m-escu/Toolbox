@@ -300,10 +300,10 @@ BuildMenus() {
     adminBadge := isAdmin ? " [ADMIN]" : " [non-admin]"
     A_IconTip := "Toolbox — Sysadmin Launcher" adminBadge
     iconDir := A_ScriptDir "\icons"
-    if isAdmin && FileExist(iconDir "	oolbox_admin.ico")
-        TraySetIcon(iconDir "	oolbox_admin.ico")
-    else if FileExist(iconDir "	oolbox.ico")
-        TraySetIcon(iconDir "	oolbox.ico")
+    if isAdmin && FileExist(iconDir "\toolbox_admin.ico")
+        TraySetIcon(iconDir "\toolbox_admin.ico")
+    else if FileExist(iconDir "\toolbox.ico")
+        TraySetIcon(iconDir "\toolbox.ico")
     A_TrayMenu.Delete()
     A_TrayMenu.Add("&S. Search...", (*) => ShowPalette())
     A_TrayMenu.Add()
