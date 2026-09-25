@@ -92,13 +92,25 @@ BuildSectionMenus() {
     sectionMenus := Map()
     for section in sectionOrder {
         m := Menu()
+        seen := Map()
         for it in GetLayoutItems(section) {
-            if it.kind = "sep"
+            if it.kind = "sep" {
                 m.Add()
-            else if it.kind = "sub"
-                AddSubIfPresent(m, section, it.label)
+                continue
+            }
+            label := it.label
+            ; Menu.Add throws on duplicate names — make unique
+            if seen.Has(label) {
+                i := 2
+                while seen.Has(label " (" i ")")
+                    i++
+                label .= " (" i ")"
+            }
+            seen[label] := true
+            if it.kind = "sub"
+                AddSubIfPresent(m, section, label)
             else
-                AddMenuAction(m, section, it.label, it.action)
+                AddMenuAction(m, section, label, it.action)
         }
         sectionMenus[section] := m
     }

@@ -53,7 +53,7 @@ ApplyHotkeys() {
 RegisterHotkeySafe(hk, action, label) {
     global registeredHotkeys
     try {
-        Hotkey(hk, action)
+        Hotkey(hk, action, "On")  ; "On": probe variants created during save are Off
         registeredHotkeys[hk] := true
     } catch as err
         ToolTip("Bad hotkey for " label " (`"" hk "`"): " err.Message)
