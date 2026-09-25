@@ -22,7 +22,7 @@ ShowMenuEditor() {
     g.MarginX := 12, g.MarginY := 12
     g.SetFont("s9", "Segoe UI")
     if FileExist(A_ScriptDir "\icons\toolbox.ico")
-        g.SetIcon(A_ScriptDir "\icons\toolbox.ico")
+        SetWindowIcon(g, A_ScriptDir "\icons\toolbox.ico")
     g.AddText("x12 y16", "Section:")
     ddlSection := g.AddDDL("x72 y12 w200 Choose1", sectionOrder)
     g.AddText("x12 y48", "Items (select a row to edit):")

@@ -403,6 +403,20 @@ OnWmCtlColorBtn(wParam, lParam, msg, hwnd) {
     return darkBgBrush
 }
 
+; Set a top-level Gui window's titlebar/taskbar icon (Gui has no SetIcon).
+; Loads .ico from file and sets both big + small via WM_SETICON.
+SetWindowIcon(guiObj, icoPath) {
+    static WM_SETICON := 0x80, ICON_BIG := 1, ICON_SMALL := 0, LR_LOADFROMFILE := 0x10
+    if !FileExist(icoPath)
+        return
+    hIcon := DllCall("user32\LoadImage", "Ptr", 0, "Str", icoPath, "UInt", 1  ; IMAGE_ICON
+        , "Int", 0, "Int", 0, "UInt", LR_LOADFROMFILE, "Ptr")
+    if !hIcon
+        return
+    SendMessage(WM_SETICON, ICON_BIG, hIcon, guiObj)
+    SendMessage(WM_SETICON, ICON_SMALL, hIcon, guiObj)
+}
+
 ; DWM dark title bar + caption color for ANY top-level window — our Gui
 ; windows AND spawned console windows (conhost) alike. bgHex: RGB string.
 ; Attrs: 20/19 = immersive dark mode (Win11+/older Win10), 35 = caption
@@ -424,6 +438,7 @@ DwmDarkFrame(hwnd, bgHex := "1F1F1F") {
 ; bgColor: optional RGB string ("0D0D0D") to override the default #1F1F1F
 ; window + caption color — used by the OLED console and future themed GUIs.
 ApplyDarkTheme(guiObj, bgColor := "") {
+    global THEME_TEXT
     if !IsDarkMode()
         return
     InitDarkBrushes()
@@ -442,10 +457,13 @@ ApplyDarkTheme(guiObj, bgColor := "") {
                 SendMessage(0x1024, 0, 0x00FFFFFF, ctrl.Hwnd)
                 SendMessage(0x1001, 0, 0x00202020, ctrl.Hwnd)
                 SendMessage(0x1026, 0, 0x00202020, ctrl.Hwnd)
-                ; Theme header control
+                ; Theme header control + color fallback (themed header may
+                ; ignore CTLCOLOR; if so the hook below still supplies colors)
                 hdrHwnd := SendMessage(0x101F, 0, 0, ctrl.Hwnd)
-                if hdrHwnd
+                if hdrHwnd {
                     DllCall("uxtheme\SetWindowTheme", "Ptr", hdrHwnd, "WStr", "DarkMode_ItemsView", "Ptr", 0)
+                    SetCtlColors(hdrHwnd, BgrOf(THEME_TEXT), BgrOf("202020"))
+                }
             } else if (cType = "Edit") {
                 ctrl.Opt("Background2B2B2B cFFFFFF")
                 DllCall("uxtheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "WStr", "DarkMode_Explorer", "Ptr", 0)

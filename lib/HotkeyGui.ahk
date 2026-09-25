@@ -34,8 +34,7 @@ ShowHotkeyEditor() {
     g := Gui(, "Toolbox — Hotkey Editor")
     g.MarginX := 12, g.MarginY := 12
     g.SetFont("s9", "Segoe UI")
-    if FileExist(A_ScriptDir "\icons\toolbox.ico")
-        g.SetIcon(A_ScriptDir "\icons\toolbox.ico")
+    SetWindowIcon(g, A_ScriptDir "\icons\toolbox.ico")
     lv := g.AddListView("w560 h280 NoSortHdr", ["Hotkey", "Target"])
     for r in rows
         lv.Add("", HkToFriendly(r.hk), r.target)
