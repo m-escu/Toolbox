@@ -72,7 +72,7 @@ ShowHotkeyEditor() {
 
     PickTarget(row) {
         if row
-            edTarget.Value := lbTargets.GetText(row)
+            edTarget.Value := lbTargets.Text
     }
 
     LoadRow(row) {

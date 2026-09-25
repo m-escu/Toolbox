@@ -77,7 +77,7 @@ ShowMenuEditor() {
 
     PickTarget(row) {
         if row
-            edTarget.Value := lbTargets.GetText(row)
+            edTarget.Value := lbTargets.Text
     }
 
     LoadSection(sec) {
