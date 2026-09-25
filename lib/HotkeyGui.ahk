@@ -124,14 +124,19 @@ ShowHotkeyEditor() {
         newBuiltins := Map(), customs := []
         for name in ["HotkeyMenu", "HotkeyPalette", "HotkeyRerun", "HotkeyEditNpp", "HotkeyTerminal"]
             newBuiltins[name] := ""
+        builtinLabels := Map(
+            "HotkeyMenu", "Main command menu",
+            "HotkeyPalette", "Command palette",
+            "HotkeyRerun", "Re-run last command",
+            "HotkeyEditNpp", "Open selected in Notepad++",
+            "HotkeyTerminal", "Open terminal here"
+        )
         loop lv.GetCount() {
             hk := FriendlyToHk(Trim(lv.GetText(A_Index, 1))), target := lv.GetText(A_Index, 2)
             if hk = ""
-                continue
+                return MsgBox("Invalid hotkey: '" lv.GetText(A_Index, 1) "' (" target "). Use form Ctrl+Alt+Q.", "Hotkey Editor", 48)
             matched := false
-            for name, label in { HotkeyMenu: "Main command menu", HotkeyPalette: "Command palette"
-                , HotkeyRerun: "Re-run last command", HotkeyEditNpp: "Open selected in Notepad++"
-                , HotkeyTerminal: "Open terminal here" } {
+            for name, label in builtinLabels {
                 if target = label {
                     newBuiltins[name] := hk, matched := true
                     break
@@ -153,6 +158,21 @@ ShowHotkeyEditor() {
             if seen.Has(c.hk)
                 return MsgBox("Hotkey '" HkToFriendly(c.hk) "' is assigned more than once.", "Hotkey Editor", 48)
             seen[c.hk] := true
+        }
+        ; syntax check: register as disabled variant, report any rejects
+        for name, hk in newBuiltins {
+            if hk = ""
+                continue
+            try
+                Hotkey(hk, (*) => 0, "Off")
+            catch
+                return MsgBox("Invalid hotkey: '" HkToFriendly(hk) "' (" name ")", "Hotkey Editor", 48)
+        }
+        for c in customs {
+            try
+                Hotkey(c.hk, (*) => 0, "Off")
+            catch
+                return MsgBox("Invalid hotkey: '" HkToFriendly(c.hk) "' (" c.target ")", "Hotkey Editor", 48)
         }
         for name, hk in newBuiltins
             IniWrite(hk, favoritesFile, "Settings", name)
@@ -239,6 +259,7 @@ FriendlyToHk(s) {
         return s
     mods := ""
     key := ""
+    badKeys := ""
     for part in StrSplit(s, "+") {
         part := Trim(part)
         if part = ""
@@ -252,10 +273,12 @@ FriendlyToHk(s) {
             mods .= "+"
         else if p = "win" || p = "windows"
             mods .= "#"
+        else if key != ""
+            badKeys := true  ; more than one key part = typo (e.g. "Ctrl+Shit+Q")
         else
             key := part
     }
-    if key = ""
+    if key = "" || badKeys
         return ""
     return mods key
 }
