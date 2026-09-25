@@ -17,6 +17,8 @@
 #Include ..\lib\Tools.ahk
 #Include ..\lib\Palette.ahk
 #Include ..\lib\HotkeyGui.ahk
+#Include ..\lib\MenuLayout.ahk
+#Include ..\lib\MenuEditor.ahk
 #Include ..\lib\Menu.ahk
 
 outFile := A_ScriptDir "\smoke-results.txt"

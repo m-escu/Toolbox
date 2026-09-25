@@ -73,6 +73,8 @@ APP_VERSION := "1.2.1"
 #Include lib\Tools.ahk
 #Include lib\Palette.ahk
 #Include lib\HotkeyGui.ahk
+#Include lib\MenuLayout.ahk
+#Include lib\MenuEditor.ahk
 #Include lib\Menu.ahk
 
 ; ============================================================
