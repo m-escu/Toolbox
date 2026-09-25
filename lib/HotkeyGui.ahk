@@ -31,9 +31,11 @@ ShowHotkeyEditor() {
             rows.Push({name: "", hk: hk, target: target, builtin: false})
     }
 
-    g := Gui("+Resize", "Toolbox — Hotkey Editor")
+    g := Gui(, "Toolbox — Hotkey Editor")
     g.MarginX := 12, g.MarginY := 12
     g.SetFont("s9", "Segoe UI")
+    if FileExist(A_ScriptDir "\icons\toolbox.ico")
+        g.SetIcon(A_ScriptDir "\icons\toolbox.ico")
     lv := g.AddListView("w560 h280 NoSortHdr", ["Hotkey", "Target"])
     for r in rows
         lv.Add("", HkToFriendly(r.hk), r.target)
