@@ -185,6 +185,7 @@ ShowHotkeyEditor() {
         SetTimer(() => ToolTip(), -3000)
     }
 
+    FilterTargets()
     g.Show()
 }
 

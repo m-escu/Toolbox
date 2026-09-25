@@ -211,6 +211,7 @@ ShowMenuEditor() {
     }
 
     LoadSection(sectionOrder[1])
+    FilterTargets()
     g.Show()
 }
 
