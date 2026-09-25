@@ -320,6 +320,30 @@ ThemeBrush(colorref) {
     return gBrushCache[colorref]
 }
 
+; ---- dark ListView header text via NM_CUSTOMDRAW ----
+; Themed headers ignore WM_CTLCOLOR*, so we custom-draw their text.
+global gDarkHeaders := Map()
+
+OnWmNotify(wParam, lParam, msg, hwnd) {
+    global gDarkHeaders
+    if !gDarkHeaders.Count
+        return
+    if (NumGet(lParam + 0, 16, "Int") != -12)  ; NM_CUSTOMDRAW
+        return
+    hwndFrom := NumGet(lParam + 0, 0, "Ptr")
+    if !gDarkHeaders.Has(hwndFrom)
+        return
+    stage := NumGet(lParam + 0, 24, "UInt")   ; NMCUSTOMDRAW.dwDrawStage
+    if (stage = 1)                             ; CDDS_PREPAINT
+        return 0x20                            ; CDRF_NOTIFYITEMDRAW
+    if (stage = 0x10001) {                     ; CDDS_ITEMPREPAINT
+        hdc := NumGet(lParam + 0, 32, "Ptr")
+        DllCall("gdi32\SetTextColor", "Ptr", hdc, "UInt", 0x00E8E8EA)
+        DllCall("gdi32\SetBkColor", "Ptr", hdc, "UInt", 0x00202020)
+        return 2                               ; CDRF_NEWFONT
+    }
+}
+
 ; Give one control exact fg/bg colors at paint time (BGR COLORREFs).
 ; Works for Text, read-only Edit (WM_CTLCOLORSTATIC) and Edit (WM_CTLCOLOREDIT).
 SetCtlColors(hwnd, fg, bk) {
@@ -336,6 +360,7 @@ EnsureCtlColorHooks() {
     OnMessage(0x0133, OnWmCtlColorEdit)    ; WM_CTLCOLOREDIT
     OnMessage(0x0135, OnWmCtlColorBtn)     ; WM_CTLCOLORBTN
     OnMessage(0x0134, OnWmCtlColorListbox) ; WM_CTLCOLORLISTBOX (combo dropdowns)
+    OnMessage(0x004E, OnWmNotify)          ; WM_NOTIFY (dark header custom draw)
     done := true
 }
 
@@ -462,7 +487,7 @@ ApplyDarkTheme(guiObj, bgColor := "") {
                 hdrHwnd := SendMessage(0x101F, 0, 0, ctrl.Hwnd)
                 if hdrHwnd {
                     DllCall("uxtheme\SetWindowTheme", "Ptr", hdrHwnd, "WStr", "DarkMode_ItemsView", "Ptr", 0)
-                    SetCtlColors(hdrHwnd, BgrOf(THEME_TEXT), BgrOf("202020"))
+                    gDarkHeaders[hdrHwnd] := true
                 }
             } else if (cType = "Edit") {
                 ctrl.Opt("Background2B2B2B cFFFFFF")
