@@ -102,7 +102,14 @@ ShowHotkeyEditor() {
             SetTimer(() => ToolTip(), -4000)
             return
         }
-        ; update in place if this hotkey already listed
+        ; update by target first (changing a hotkey = replace, not new row),
+        ; then by hotkey; otherwise add
+        loop lv.GetCount() {
+            if lv.GetText(A_Index, 2) = target {
+                lv.Modify(A_Index, "", HkToFriendly(FriendlyToHk(hk)), target)
+                return
+            }
+        }
         loop lv.GetCount() {
             if HkToFriendly(FriendlyToHk(lv.GetText(A_Index, 1))) = HkToFriendly(FriendlyToHk(hk)) {
                 lv.Modify(A_Index, "", HkToFriendly(FriendlyToHk(hk)), target)
