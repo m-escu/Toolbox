@@ -106,8 +106,10 @@ ShowMenuEditor() {
             return
         it := allModels[ddlSection.Text][row]
         ; separators and submenus are read-only in the editor
-        if it.kind != "item"
+        if it.kind != "item" {
+            edLabel.Value := "", edTarget.Value := ""
             return
+        }
         edLabel.Value := it.label
         edTarget.Value := (SubStr(it.action, 1, 4) = "run:") ? SubStr(it.action, 5) : it.action
         FilterTargets()
@@ -141,7 +143,7 @@ ShowMenuEditor() {
         pos := row ? row + 1 : allModels[sec].Length + 1
         allModels[sec].InsertAt(pos, it)
         LoadSection(sec)
-        lv.Modify(pos, "Select")
+        lv.Modify(pos, "Select Vis")
     }
 
     AddSeparator() {
@@ -150,7 +152,7 @@ ShowMenuEditor() {
         pos := row ? row + 1 : allModels[sec].Length + 1
         allModels[sec].InsertAt(pos, {kind: "sep", label: "", action: ""})
         LoadSection(sec)
-        lv.Modify(pos, "Select")
+        lv.Modify(pos, "Select Vis")
     }
 
     UpdateItem() {
@@ -168,7 +170,7 @@ ShowMenuEditor() {
         }
         allModels[ddlSection.Text][row] := it
         LoadSection(ddlSection.Text)
-        lv.Modify(row, "Select")
+        lv.Modify(row, "Select Vis")
     }
 
     RemoveItem() {
@@ -193,7 +195,7 @@ ShowMenuEditor() {
         items := allModels[sec]
         tmp := items[row], items[row] := items[tgt], items[tgt] := tmp
         LoadSection(sec)
-        lv.Modify(tgt, "Select")
+        lv.Modify(tgt, "Select Vis")
     }
 
     ResetSection() {
