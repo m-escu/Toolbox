@@ -68,7 +68,7 @@ ShowHotkeyEditor() {
         q := cbTarget.Text
         cbTarget.Delete()
         for name in allTargets
-            if InStr(name, q)  ; case-insensitive substring match
+            if (q = "" || InStr(name, q))  ; case-insensitive substring match
                 cbTarget.Add([name])
         cbTarget.Text := q  ; rebuilding the list clears the edit text — restore it
         ; keep caret at end of the typed text

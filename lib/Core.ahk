@@ -335,7 +335,26 @@ EnsureCtlColorHooks() {
     OnMessage(0x0138, OnWmCtlColorStatic)  ; WM_CTLCOLORSTATIC
     OnMessage(0x0133, OnWmCtlColorEdit)    ; WM_CTLCOLOREDIT
     OnMessage(0x0135, OnWmCtlColorBtn)     ; WM_CTLCOLORBTN
+    OnMessage(0x0134, OnWmCtlColorListbox) ; WM_CTLCOLORLISTBOX (combo dropdowns)
     done := true
+}
+
+; Dark paint for listboxes incl. ComboBox dropped lists — the dropdown
+; popup is a separate top-level window, so SetWindowTheme alone is not
+; enough; this hook supplies its background/text brushes.
+OnWmCtlColorListbox(wParam, lParam, msg, hwnd) {
+    global gCtlColors, darkCtlBrush
+    if gCtlColors.Has(lParam) {
+        c := gCtlColors[lParam]
+        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
+        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
+        return ThemeBrush(c.bk)
+    }
+    if !IsDarkMode()
+        return
+    DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00FFFFFF)
+    DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", 0x002B2B2B)
+    return darkCtlBrush
 }
 
 OnWmCtlColorStatic(wParam, lParam, msg, hwnd) {
