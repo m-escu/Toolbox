@@ -1,8 +1,18 @@
 ; ============================================================
-; HOTKEYS (INI-configurable in [Settings])
+; HOTKEYS (INI-configurable in [Settings]; custom ones in [Hotkeys])
+; Empty value in [Settings] disables that built-in hotkey.
+; [Hotkeys] format:  Hotkey=Target  where Target is a registered
+; command label or a raw command line.
 ; ============================================================
+global registeredHotkeys := Map()
+
 ApplyHotkeys() {
-    global favoritesFile
+    global favoritesFile, registeredHotkeys
+    ; unregister previous bindings so re-applying picks up changes
+    for hk in registeredHotkeys.Clone()
+        try Hotkey(hk, , "Off")
+    registeredHotkeys := Map()
+
     defaults := Map(
         "HotkeyMenu", "^+m",
         "HotkeyPalette", "^+p",
@@ -19,12 +29,52 @@ ApplyHotkeys() {
     )
     for name, def in defaults {
         hk := IniRead(favoritesFile, "Settings", name, def)
-        try Hotkey(hk, actions[name])
-        catch as err
-            ToolTip("Bad hotkey for " name " (`"" hk "`"): " err.Message)
+        if Trim(hk) = ""
+            continue  ; disabled in INI
+        RegisterHotkeySafe(hk, actions[name], name)
+    }
+    ; custom hotkeys: [Hotkeys] section, Hotkey=Target
+    section := IniRead(favoritesFile, "Hotkeys", , "")
+    for line in StrSplit(section, "`n") {
+        p := InStr(line, "=")
+        if !p
+            continue
+        hk := Trim(SubStr(line, 1, p - 1))
+        target := Trim(SubStr(line, p + 1))
+        if hk = "" || target = ""
+            continue
+        if registeredHotkeys.Has(hk)
+            continue  ; conflict with built-in — already warned at registration
+        RegisterHotkeySafe(hk, CreateCustomHotkeyAction(target), "Hotkey: " target)
     }
     SetTimer(() => ToolTip(), -4000)
 }
+
+RegisterHotkeySafe(hk, action, label) {
+    global registeredHotkeys
+    try {
+        Hotkey(hk, action)
+        registeredHotkeys[hk] := true
+    } catch as err
+        ToolTip("Bad hotkey for " label " (`"" hk "`"): " err.Message)
+}
+
+; Custom hotkey target: registered command label if known, else raw command line
+CreateCustomHotkeyAction(target) {
+    global commandRegistry
+    if commandRegistry.Has(target)
+        return (*) => RunAndLog(target)
+    return (*) => RunCustomHotkeyCommand(target)
+}
+
+RunCustomHotkeyCommand(target) {
+    LogCommand("Hotkey: " target)
+    try
+        Run(target)
+    catch as err
+        MsgBox("Hotkey command failed:`n`n" target "`n`n" err.Message, "Toolbox", 48)
+}
+
 
 BuildMenus() {
     fileMenu := Menu()
@@ -225,13 +275,11 @@ BuildMenus() {
     toolsMenu.Add("Browse tool catalog...", MakeLogged("Browse tool catalog", (*) => ToolBrowseCatalog()))
 
     settingsMenu := Menu()
-    settingsMenu.Add("&1. Edit this script", (*) => Run('"' nppPath '" "' A_ScriptFullPath '"'))
-    settingsMenu.Add("&2. Edit favorites (INI)", (*) => EditFavorites())
+    settingsMenu.Add("&1. Hotkeys...", (*) => ShowHotkeyEditor())
+    settingsMenu.Add("&2. Clear recently used...", (*) => ClearRecents())
     settingsMenu.Add()
-    settingsMenu.Add("&3. Clear recently used...", (*) => ClearRecents())
-    settingsMenu.Add("&4. Reload script", (*) => Reload())
-    settingsMenu.Add("&5. Suspend hotkeys", (*) => Suspend(-1))
-    settingsMenu.Add("&6. Pause script", (*) => Pause(-1))
+    settingsMenu.Add("&3. Suspend hotkeys", (*) => Suspend(-1))
+    settingsMenu.Add("&4. Pause script", (*) => Pause(-1))
 
     LoadSnippets()
 
@@ -270,10 +318,11 @@ BuildMenus() {
     A_TrayMenu.Add("&6. Clipboard", clipMenu)
     A_TrayMenu.Add("&7. Tools", toolsMenu)
     A_TrayMenu.Add()
-    A_TrayMenu.Add("&8. Edit this script", (*) => Run('"' nppPath '" "' A_ScriptFullPath '"'))
-    A_TrayMenu.Add("&9. Edit favorites (INI)", (*) => EditFavorites())
+    A_TrayMenu.Add("&8. Settings", settingsMenu)
+    A_TrayMenu.Add("&9. Edit this script", (*) => Run('"' nppPath '" "' A_ScriptFullPath '"'))
+    A_TrayMenu.Add("1&0. Edit favorites (INI)", (*) => EditFavorites())
     A_TrayMenu.Add()
-    A_TrayMenu.Add("&0. Reload script", (*) => Reload())
+    A_TrayMenu.Add("&R. Reload script", (*) => Reload())
     A_TrayMenu.Add("E&xit", (*) => ExitApp())
     A_TrayMenu.ClickCount := 1
 }
@@ -281,6 +330,7 @@ BuildMenus() {
 ShowMainMenu() {
     global mainMenu, recentMenu
     RebuildRecentMenu()
+    FlushMenuThemes()
     mainMenu.Show()
 }
 

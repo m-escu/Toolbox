@@ -61,6 +61,7 @@ APP_VERSION := "1.2.1"
 ; --- ADMIN DETECTION ---
 ; Modules (single namespace — include order matters)
 #Include lib\Config.ahk
+#Include lib\DarkMenu.ahk
 #Include lib\Recent.ahk
 #Include lib\Core.ahk
 #Include lib\Console.ahk
@@ -71,13 +72,16 @@ APP_VERSION := "1.2.1"
 #Include lib\Clipboard.ahk
 #Include lib\Tools.ahk
 #Include lib\Palette.ahk
+#Include lib\HotkeyGui.ahk
 #Include lib\Menu.ahk
 
 ; ============================================================
 ; STARTUP
 ; ============================================================
 CleanupOldTemp()
+EnableDarkMenus()
 BuildMenus()
+FlushMenuThemes()
 ApplyHotkeys()
 
 ; After an auto-elevate relaunch, resume the command that triggered it

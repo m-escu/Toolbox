@@ -5,6 +5,7 @@
 ; tests/smoke-results.txt. Run: AutoHotkey64.exe tests/Smoke.ahk
 
 #Include ..\lib\Config.ahk
+#Include ..\lib\DarkMenu.ahk
 #Include ..\lib\Recent.ahk
 #Include ..\lib\Core.ahk
 #Include ..\lib\Console.ahk
@@ -15,6 +16,7 @@
 #Include ..\lib\Clipboard.ahk
 #Include ..\lib\Tools.ahk
 #Include ..\lib\Palette.ahk
+#Include ..\lib\HotkeyGui.ahk
 #Include ..\lib\Menu.ahk
 
 outFile := A_ScriptDir "\smoke-results.txt"
