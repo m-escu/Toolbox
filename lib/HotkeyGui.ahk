@@ -72,8 +72,8 @@ ShowHotkeyEditor() {
             if (q = "" || InStr(name, q))  ; case-insensitive substring match
                 cbTarget.Add([name])
         cbTarget.Text := q  ; rebuilding the list clears the edit text — restore it
-        ; keep caret at end of the typed text
-        SendMessage(0x01B4, 0, -1, cbTarget.Hwnd)  ; CB_SETEDITSEL
+        ; caret to end of typed text (LOWORD=start, HIWORD=end of selection)
+        SendMessage(0x01B4, 0, (StrLen(q) << 16) | StrLen(q), cbTarget.Hwnd)  ; CB_SETEDITSEL
         busy := false
     }
 

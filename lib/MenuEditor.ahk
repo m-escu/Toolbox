@@ -41,15 +41,17 @@ ShowMenuEditor() {
     btnDel := g.AddButton("x184 y396 w80", "Remove")
     btnAdd := g.AddButton("x270 y396 w80", "Add")
     btnUpd := g.AddButton("x356 y396 w80", "Update")
-    btnReset := g.AddButton("x442 y396 w95", "Reset section")
-    btnSave := g.AddButton("x545 y396 w115 Default", "Save && Rebuild")
-    g.AddButton("x670 y396 w80", "Close").OnEvent("Click", (*) => g.Destroy())
+    btnSep := g.AddButton("x442 y396 w80", "Add sep")
+    btnReset := g.AddButton("x528 y396 w95", "Reset section")
+    btnSave := g.AddButton("x630 y396 w115 Default", "Save && Rebuild")
+    g.AddButton("x755 y396 w80", "Close").OnEvent("Click", (*) => g.Destroy())
 
     btnUp.OnEvent("Click", (*) => MoveItem(-1))
     btnDown.OnEvent("Click", (*) => MoveItem(1))
     btnDel.OnEvent("Click", (*) => RemoveItem())
     btnAdd.OnEvent("Click", (*) => AddItem())
     btnUpd.OnEvent("Click", (*) => UpdateItem())
+    btnSep.OnEvent("Click", (*) => AddSeparator())
     btnReset.OnEvent("Click", (*) => ResetSection())
     btnSave.OnEvent("Click", (*) => SaveAndRebuild())
     ddlSection.OnEvent("Change", (*) => SwitchSection())
@@ -117,6 +119,15 @@ ShowMenuEditor() {
         row := lv.GetNext()
         pos := row ? row + 1 : allModels[sec].Length + 1
         allModels[sec].InsertAt(pos, it)
+        LoadSection(sec)
+        lv.Modify(pos, "Select")
+    }
+
+    AddSeparator() {
+        sec := ddlSection.Text
+        row := lv.GetNext()
+        pos := row ? row + 1 : allModels[sec].Length + 1
+        allModels[sec].InsertAt(pos, {kind: "sep", label: "", action: ""})
         LoadSection(sec)
         lv.Modify(pos, "Select")
     }
