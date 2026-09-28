@@ -13,3 +13,6 @@ tests/smoke-results.txt
 # ZCode plugin session state (never repo content)
 .mimosa/
 .video_agent/
+
+# graft local cache
+graft/
