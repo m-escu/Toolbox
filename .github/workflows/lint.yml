@@ -18,16 +18,14 @@ jobs:
       - name: Syntax check (main script)
         shell: pwsh
         run: |
+          # /Validate loads + parses the script (and every #Include) without running it
           $tmp = Join-Path $env:RUNNER_TEMP "lint"
           New-Item -ItemType Directory -Force $tmp | Out-Null
-          Copy-Item Toolbox.ahk, catalog.json, lib -Destination $tmp -Recurse
-          $check = Join-Path $tmp "check.ahk"
-          Add-Content -Path $check -Value "`nExitApp()" -Encoding utf8
           $p = Start-Process -FilePath "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" `
-              -ArgumentList "/ErrorStdOut", $check -RedirectStandardOutput "$tmp\out.txt" `
+              -ArgumentList "/ErrorStdOut", "/Validate", "Toolbox.ahk" -RedirectStandardOutput "$tmp\out.txt" `
               -RedirectStandardError "$tmp\err.txt" -PassThru -Wait
           $text = (Get-Content "$tmp\out.txt", "$tmp\err.txt" -ErrorAction SilentlyContinue) -join "`n"
-          if ($text) { $text | Write-Host; throw "syntax errors found" }
+          if ($text -or $p.ExitCode -ne 0) { $text | Write-Host; throw "syntax errors found (exit $($p.ExitCode))" }
           Write-Host "syntax OK"
 
       - name: Smoke tests

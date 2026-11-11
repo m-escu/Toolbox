@@ -166,20 +166,22 @@ ShowHotkeyEditor() {
                 return MsgBox("Hotkey '" HkToFriendly(c.hk) "' is assigned more than once.", "Hotkey Editor", 48)
             seen[c.hk] := true
         }
-        ; syntax check: register as disabled variant, report any rejects
+        ; syntax check: register as disabled no-op variant, report any rejects.
+        ; Probing an already-live hotkey replaces its callback and turns it
+        ; Off, so on any reject re-apply the saved (unchanged) INI bindings.
         for name, hk in newBuiltins {
             if hk = ""
                 continue
             try
                 Hotkey(hk, (*) => 0, "Off")
             catch
-                return MsgBox("Invalid hotkey: '" HkToFriendly(hk) "' (" name ")", "Hotkey Editor", 48)
+                return ProbeFailed("Invalid hotkey: '" HkToFriendly(hk) "' (" name ")")
         }
         for c in customs {
             try
                 Hotkey(c.hk, (*) => 0, "Off")
             catch
-                return MsgBox("Invalid hotkey: '" HkToFriendly(c.hk) "' (" c.target ")", "Hotkey Editor", 48)
+                return ProbeFailed("Invalid hotkey: '" HkToFriendly(c.hk) "' (" c.target ")")
         }
         for name, hk in newBuiltins
             IniWrite(hk, favoritesFile, "Settings", name)
@@ -190,6 +192,11 @@ ShowHotkeyEditor() {
         ApplyHotkeys()
         ToolTip("Hotkeys saved & applied.")
         SetTimer(() => ToolTip(), -3000)
+    }
+
+    ProbeFailed(msg) {
+        ApplyHotkeys()  ; restore callbacks the probes overwrote
+        MsgBox(msg, "Hotkey Editor", 48)
     }
 
     FilterTargets()

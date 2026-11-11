@@ -2,23 +2,27 @@
 ; SHARED UTILITIES: run & capture, show output, pick menus, temp PS
 ; ============================================================
 
-; Run a console command, capture stdout. Blocks until the command finishes
-; (no timeout — a blocking read is the only deadlock-safe option here).
-; StdOut is read FIRST: StdErr.ReadAll() blocks until process exit, so draining
-; it while the process is alive deadlocks both sides once the stdout pipe fills.
+; Run a console command hidden and return its stdout + stderr (merged, in
+; order). Blocks until the command finishes.
+; Why a temp file and not WScript.Shell.Exec: Exec always flashes a console
+; window, and reading its two pipes one after the other deadlocks as soon as
+; the child fills the pipe we are NOT reading (~4 KB of PowerShell errors on
+; stderr is enough). cmd's "> file 2>&1" has no pipes, so it cannot deadlock.
+; Caveat: the line goes through cmd, so a literal %NAME% in it is expanded.
 RunCapture(cmd) {
+    static runCount := 0
+    runCount += 1
+    capFile := A_Temp "\toolbox_cap" DllCall("GetCurrentProcessId") "_" runCount ".txt"
     output := ""
     try {
-        shell := ComObject("WScript.Shell")
-        exec := shell.Exec(cmd)
-        output := exec.StdOut.ReadAll()   ; blocks until stdout EOF (process exit)
-        errOut := ""
-        try errOut := exec.StdErr.ReadAll()
-        if Trim(output) = "" && Trim(errOut) != ""
-            output := errOut
+        ; /S: strip exactly the outer quote pair, keep every inner quote as-is
+        RunWait(A_ComSpec ' /S /C "' cmd ' > "' capFile '" 2>&1"', , "Hide")
+        if FileExist(capFile)
+            output := FileRead(capFile, "CP" DllCall("GetOEMCP", "UInt"))  ; console output is OEM codepage
     } catch as err {
         output := "Error: " err.Message
     }
+    try FileDelete(capFile)
     return output
 }
 
@@ -200,6 +204,32 @@ ParseMask(maskStr) {
         return (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF
     }
     return IpToInt(maskStr)
+}
+
+; Parse "IP MASK", "IP /N" or "IP/N" and compute the subnet. Pure — no GUI.
+; Returns {ok: true, ip, mask, cidr, network, broadcast, hosts} (ints), or
+; {ok: false, error: "..."}.
+SubnetCalc(text) {
+    text := Trim(StrReplace(text, "/", " /"))
+    parts := StrSplit(RegExReplace(text, "\s+", " "), " ")
+    if parts.Length != 2
+        return {ok: false, error: "Enter IP and mask, separated by a space (or IP/CIDR like 10.0.0.5/22)."}
+    ip := IpToInt(parts[1])
+    mask := ParseMask(parts[2])
+    if ip < 0 || mask < 0
+        return {ok: false, error: "Invalid IP or mask."}
+    wild := mask ^ 0xFFFFFFFF
+    if (wild & (wild + 1)) != 0  ; mask bits must be contiguous (no 255.0.255.0)
+        return {ok: false, error: "Invalid mask (bits not contiguous)."}
+    cidr := 0
+    loop 32 {
+        if (mask >> (32 - A_Index)) & 1
+            cidr++
+    }
+    network := ip & mask
+    broadcast := network | wild
+    hosts := mask = 0xFFFFFFFF ? 1 : broadcast - network - 1
+    return {ok: true, ip: ip, mask: mask, cidr: cidr, network: network, broadcast: broadcast, hosts: hosts}
 }
 
 ; ============================================================

@@ -42,6 +42,7 @@ jobs:
           & $ahk2exe /in Toolbox.ahk /out dist\\Toolbox.exe /base $base
           if ($LASTEXITCODE -ne 0) { throw "Ahk2Exe failed" }
           Copy-Item catalog.json, LICENSE, README.md, CHANGELOG.md, ToolboxFavorites.example.ini dist\\
+          Copy-Item icons -Destination dist\\icons -Recurse  # tray icons are loaded from A_ScriptDir\icons
           Compress-Archive -Path dist\\* -DestinationPath "Toolbox-v$env:VER.zip" -Force
 
       - name: Create release

@@ -5,8 +5,10 @@ userProfile := EnvGet("USERPROFILE")
 isAdmin := DllCall("shell32\IsUserAnAdmin")  ; returns 1 (true) or 0 (false)
 
 ; Helper: warn if not admin. Returns true to proceed, false to abort.
+; commandLabel MUST be the command's registry label (SpecAdd action label):
+; in auto mode it's handed to the elevated instance, which re-runs it.
 ; Settings.WarnNonAdmin in INI: 1 = warn (default), 0 = silent
-; Settings.ElevateMode in INI: "auto" = relaunch elevated (default), "warn" = old behavior
+; Settings.ElevateMode in INI: "auto" = relaunch elevated, "warn" (default) = ask
 RequireAdmin(commandLabel) {
     global isAdmin, favoritesFile
     if isAdmin
@@ -16,8 +18,13 @@ RequireAdmin(commandLabel) {
         ToolTip("Relaunching Toolbox as admin...")
         SetTimer(() => ToolTip(), -2000)
         try {
-            EnvSet("TOOLBOX_PENDING", commandLabel)  ; resume this command after relaunch
-            Run("*RunAs `"" A_AhkPath "`" `"" A_ScriptFullPath "`"")
+            ; Resume via a command-line arg: UAC-elevated processes get a fresh
+            ; environment, so an env var would not survive the relaunch.
+            pendingArg := ' --pending "' StrReplace(commandLabel, '"', "") '"'
+            if A_IsCompiled
+                Run('*RunAs "' A_ScriptFullPath '"' pendingArg)
+            else
+                Run('*RunAs "' A_AhkPath '" "' A_ScriptFullPath '"' pendingArg)
             ExitApp()
         } catch {
             return false  ; UAC declined

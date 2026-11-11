@@ -61,7 +61,7 @@ NetListAdapters() {
 
 ; --- Set static IP (popup menu: saved profiles first, then adapters) ---
 NetSetStatic() {
-    if !RequireAdmin("Set static IP")
+    if !RequireAdmin("Set static IP on adapter...")
         return
     profiles := LoadIpProfiles()
     if profiles.Length > 0 {
@@ -127,34 +127,20 @@ ApplyStaticIp(adapter, ip, mask, gw, dns) {
     ips := ParseIpList(ip)
     output := ""
 
-    try {
-        shell := ComObject("WScript.Shell")
+    ; First IP: use "set address" (sets/replaces primary)
+    if ips.Length > 0 {
+        cmd := 'netsh interface ip set address "' adapter '" static ' ips[1] ' ' mask
+        if gw != ""
+            cmd .= ' ' gw
+        output .= RunCapture(cmd) "`n"
 
-        ; First IP: use "set address" (sets/replaces primary)
-        if ips.Length > 0 {
-            cmd := 'netsh interface ip set address "' adapter '" static ' ips[1] ' ' mask
-            if gw != ""
-                cmd .= ' ' gw
-            exec := shell.Exec(cmd)
-            output .= exec.StdOut.ReadAll() "`n"
-
-            ; Additional IPs: use "add address" (secondary IPs on same interface)
-            if ips.Length > 1 {
-                loop ips.Length - 1 {
-                    addCmd := 'netsh interface ip add address "' adapter '" ' ips[A_Index + 1] ' ' mask
-                    exec := shell.Exec(addCmd)
-                    output .= exec.StdOut.ReadAll() "`n"
-                }
-            }
-        }
-
-        if dns != "" {
-            exec := shell.Exec('netsh interface ip set dns "' adapter '" static ' dns)
-            output .= exec.StdOut.ReadAll() "`n"
-        }
-    } catch as err {
-        output := "Error: " err.Message
+        ; Additional IPs: use "add address" (secondary IPs on same interface)
+        loop ips.Length - 1
+            output .= RunCapture('netsh interface ip add address "' adapter '" ' ips[A_Index + 1] ' ' mask) "`n"
     }
+
+    if dns != ""
+        output .= RunCapture('netsh interface ip set dns "' adapter '" static ' dns) "`n"
 
     ; Save to favorites
     try AddIpProfile(adapter, ip, mask, gw, dns)
@@ -171,7 +157,7 @@ ApplyStaticIp(adapter, ip, mask, gw, dns) {
 
 ; --- Set adapter to DHCP (popup menu pick) ---
 NetSetDhcp() {
-    if !RequireAdmin("Set adapter to DHCP")
+    if !RequireAdmin("Set adapter to DHCP...")
         return
     adapters := GetAdapters()
     if adapters.Length == 0 {
@@ -299,7 +285,7 @@ NetRouteAdd() {
         return
     metric := TbInputBox("Metric (optional, leave blank for auto)", "Add Route — Metric", "w400 h150").Value
 
-    if !RequireAdmin("Add Route")
+    if !RequireAdmin("Add route...")
         return
 
     cmd := 'route add ' dest ' mask ' mask ' ' gateway
@@ -322,7 +308,7 @@ NetRouteDelete() {
     if gateway = ""
         return
 
-    if !RequireAdmin("Delete Route")
+    if !RequireAdmin("Delete route...")
         return
 
     cmd := 'route delete ' dest ' mask ' mask ' ' gateway
@@ -331,7 +317,7 @@ NetRouteDelete() {
 
 ; --- Reset routes / re-register DNS ---
 NetRouteReset() {
-    if !RequireAdmin("Reset Routes")
+    if !RequireAdmin("Reset routes")
         return
     Run('cmd /k route -f && netsh winsock reset && netsh int ip reset && ipconfig /flushdns && ipconfig /registerdns && echo Routes reset complete. Reboot recommended. && pause')
 }
@@ -393,8 +379,7 @@ NetSsh() {
     AddFavorite(resolved, "AddressFavorites")
 
     ; Try Windows Terminal SSH first, then fall back to cmd
-    wtPath := userProfile "\AppData\Local\Microsoft\WindowsApps\wt.exe"
-    if FileExist(wtPath)
+    if HasWindowsTerminal()
         Run('wt.exe ssh "' resolved '"')
     else
         Run('cmd /k ssh "' resolved '"')
@@ -462,45 +447,28 @@ NetSubnetCalc() {
     if input.Result != "OK" || input.Value = ""
         return
 
-    parts := StrSplit(Trim(input.Value))
-    if parts.Length < 2 {
-        MsgBox("Enter IP and mask, separated by a space (or IP/CIDR like 10.0.0.5/22).", "Subnet Calculator", 48)
+    r := SubnetCalc(input.Value)
+    if !r.ok {
+        MsgBox(r.error, "Subnet Calculator", 48)
         return
     }
-    ip := IpToInt(parts[1])
-    mask := ParseMask(parts[2])
-    if ip < 0 || mask < 0 {
-        MsgBox("Invalid IP or mask.", "Subnet Calculator", 48)
-        return
+    ipText := IntToIp(r.ip)
+    msg := "IP:       " ipText "`n"
+    msg .= "Mask:     " IntToIp(r.mask) " (/" r.cidr ")`n`n"
+    msg .= "Network:  " IntToIp(r.network) "`n"
+    msg .= "Broadcast:" IntToIp(r.broadcast) "`n"
+    if r.hosts > 1 {
+        msg .= "First host: " IntToIp(r.network + 1) "`n"
+        msg .= "Last host:  " IntToIp(r.broadcast - 1) "`n"
     }
-
-    ; Count mask bits for CIDR notation
-    cidr := 0
-    loop 32 {
-        if (mask >> (32 - A_Index)) & 1
-            cidr++
-    }
-
-    network := ip & mask
-    broadcast := network | (mask ^ 0xFFFFFFFF)
-    hosts := mask = 0xFFFFFFFF ? 1 : broadcast - network - 1
-
-    msg := "IP:       " parts[1] "`n"
-    msg .= "Mask:     " IntToIp(mask) " (/" cidr ")`n`n"
-    msg .= "Network:  " IntToIp(network) "`n"
-    msg .= "Broadcast:" IntToIp(broadcast) "`n"
-    if hosts > 0 {
-        msg .= "First host: " IntToIp(network + 1) "`n"
-        msg .= "Last host:  " IntToIp(broadcast - 1) "`n"
-    }
-    msg .= "Usable hosts: " hosts
+    msg .= "Usable hosts: " r.hosts
     A_Clipboard := msg
-    MsgBox(msg "`n`n(Copied to clipboard)", "Subnet Calculator — " parts[1] "/" cidr, 64)
+    MsgBox(msg "`n`n(Copied to clipboard)", "Subnet Calculator — " ipText "/" r.cidr, 64)
 }
 
 ; --- Set DNS on adapter (quick presets) ---
 NetDnsToggle() {
-    if !RequireAdmin("Set DNS")
+    if !RequireAdmin("Set DNS on adapter")
         return
     adapters := GetAdapters()
     if adapters.Length == 0 {
@@ -516,7 +484,7 @@ PickDnsPreset(adapter) {
 }
 
 ApplyDnsPreset(adapter, preset) {
-    if !RequireAdmin("Set DNS")
+    if !RequireAdmin("Set DNS on adapter")
         return
     output := ""
     if preset = "Cloudflare (1.1.1.1)" {

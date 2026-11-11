@@ -23,13 +23,9 @@ ToolYtDlp() {
     if ytdlpExe != "" {
         ytdlpCmd := '"' ytdlpExe '"'
     } else {
-        try {
-            shell := ComObject("WScript.Shell")
-            exec := shell.Exec('where yt-dlp 2>nul')
-            whereOut := Trim(exec.StdOut.ReadAll())
-            if whereOut != ""
-                ytdlpCmd := "yt-dlp"
-        }
+        ; RunCapture merges stderr ("INFO: Could not find..."), so look for a path
+        if RegExMatch(RunCapture("where yt-dlp"), "im)^[A-Z]:\\.*yt-dlp")
+            ytdlpCmd := "yt-dlp"
     }
 
     if ytdlpCmd = "" {
@@ -364,17 +360,10 @@ ToolHandle64() {
     ; extract just the filename for the filter (handle64 matches on name, not path)
     fileName := StrSplit(selectedFile, "\")[-1]
     try {
-        shell := ComObject("WScript.Shell")
         ; -nobanner suppresses the copyright line; -accepteula skips the EULA popup
-        exec := shell.Exec('"' exePath '" -accepteula -nobanner "' fileName '"')
-        ; Read stdout first — reading stderr before exit deadlocks (pipe fill)
-        output := Trim(exec.StdOut.ReadAll())
-        errOut := Trim(exec.StdErr.ReadAll())
-        ; Combine outputs for completeness
-        if output = "" && errOut != ""
-            output := errOut
-        ; handle64 outputs nothing when no matches — provide a helpful message
-        if output = ""
+        output := Trim(RunCapture('"' exePath '" -accepteula -nobanner "' fileName '"'))
+        ; handle64 prints "No matching handles found." (or nothing) when no matches
+        if output = "" || InStr(output, "No matching handles")
             output := "No matching handles found.`n`n"
                 . "Possible reasons:`n"
                 . "  - No process is locking this file.`n"

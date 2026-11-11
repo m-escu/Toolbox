@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- Fix: subnet calculator always reported "Invalid IP or mask" (input was split per character); now accepts `IP MASK`, `IP /N` and `IP/N`, rejects non-contiguous masks — logic moved to pure `SubnetCalc()`
+- Fix: Windows activation status always said "Could not query" (the licensing query line was missing)
+- Fix: Toggle Wi-Fi never found the adapter (`Get-NetAdapter -InterfaceType` doesn't exist); now detects the 802.11 adapter, and a disconnected-but-enabled adapter is no longer treated as "on"
+- Fix: auto-elevate resume — the command is passed as `--pending "<label>"` (UAC-elevated processes don't inherit env vars), `RequireAdmin` labels now match registry labels, and compiled builds relaunch the exe correctly
+- Fix: an invalid hotkey in the Hotkey editor no longer leaves other live hotkeys disabled
+- Fix: Kill process shows taskkill's error text instead of an empty box
+- Fix: Windows Terminal detection (path typo) for "Open terminal here" / SSH
+- Fix: a saved menu layout no longer hides commands and tool-suite submenus added later — new defaults are merged in (tracked in INI `[MenuKnown]`), deliberately removed ones stay hidden
+- Fix: folder menu labels/paths showed `\\` (AHK has no backslash escapes); old saved layouts are migrated
+- Fix: `catalog.json` parser handles `\"`, `\\`, `\uXXXX` and throws on malformed input instead of hanging at startup
+- Fix: updater prefers binaries in an `x64\` folder (the old check matched any path with a folder ending in "d")
+- `RunCapture` runs hidden through a temp-file redirect: no console flash, stderr merged, no deadlock on large stderr output; remaining `WScript.Shell.Exec` call sites switched to it
+- CI: lint now really parses `Toolbox.ahk` (`/Validate`; the old step checked an empty file); release zip includes `icons/`
+- Smoke tests: subnet calc, JSON escapes/errors, RunCapture stderr flood, RequireAdmin-label ↔ registry check, layout merge + legacy migration
 - Output console: `ShowText` now opens a themed OLED window (`lib/Console.ahk`) — Consolas body, accent-bar header with timestamp + line count, Copy / Open in editor / Close buttons, live status line, resizable; dark caption + per-control colors via new WM_CTLCOLOR override map
 - New INI key `[Settings] OutputMode` — `console` (default) or `file` to restore the temp-text-file behavior
 - Core: `ApplyDarkTheme(gui, bgColor)` accepts a background override; theme constants (`THEME_BG`, `THEME_ACCENT`, ...) shared for future restyling

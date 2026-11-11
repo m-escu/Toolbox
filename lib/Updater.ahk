@@ -74,17 +74,25 @@ JsonParse(text) {
         }
         loop {
             SkipWs()
+            if SubStr(text, pos, 1) != '"'
+                Fail("expected object key")
             key := ParseString()
             SkipWs()
-            pos++  ; :
+            if SubStr(text, pos, 1) != ":"
+                Fail("expected ':'")
+            pos++
             obj[key] := ParseValue()
             SkipWs()
             ch := SubStr(text, pos, 1)
             pos++
             if ch = "}"
                 return obj
-            ; else ch = "," — continue
+            if ch != ","
+                Fail("expected ',' or '}'")
         }
+    }
+    Fail(what) {
+        throw Error("JSON: " what " at position " pos)
     }
     ParseArray() {
         arr := []
@@ -101,21 +109,34 @@ JsonParse(text) {
             pos++
             if ch = "]"
                 return arr
+            if ch != ","
+                Fail("expected ',' or ']'")
         }
     }
     ParseString() {
         pos++  ; opening quote
         out := ""
         loop {
+            if pos > StrLen(text)
+                Fail("unterminated string")
             ch := SubStr(text, pos, 1)
             if ch = '"' {
                 pos++
                 return out
             }
-            if ch = "\\" {
+            if ch = "\" {  ; AHK has no backslash escapes: "\" is ONE backslash
                 esc := SubStr(text, pos + 1, 1)
+                if esc = "u" {
+                    hex := SubStr(text, pos + 2, 4)
+                    if !RegExMatch(hex, "^[0-9A-Fa-f]{4}$")
+                        Fail("bad \u escape")
+                    out .= Chr(Integer("0x" hex))
+                    pos += 6
+                    continue
+                }
                 pos += 2
-                out .= esc = "n" ? "`n" : esc = "t" ? "`t" : esc
+                out .= esc = "n" ? "`n" : esc = "t" ? "`t" : esc = "r" ? "`r"
+                     : esc = "b" ? "`b" : esc = "f" ? "`f" : esc  ; \" \\ \/ map to themselves
             } else {
                 out .= ch
                 pos++
@@ -212,8 +233,11 @@ DownloadAndInstallTool(exeName, info) {
         best := ""
         Loop Files tmpDir "\*.*", "R" {
             if StrLower(A_LoopFileName) = StrLower(want) {
-                if best = "" || InStr(StrLower(A_LoopFilePath), "d\")
-                    best := A_LoopFilePath  ; prefer 64-bit build when present
+                ; prefer a build inside an x64\ folder when the zip has one
+                ; (checked on the path INSIDE the zip, not the temp dir)
+                relPath := StrLower(SubStr(A_LoopFilePath, StrLen(tmpDir) + 2))
+                if best = "" || InStr(relPath, "x64\")
+                    best := A_LoopFilePath
             }
         }
         if best != "" {

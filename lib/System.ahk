@@ -6,36 +6,23 @@
 ToggleWifi() {
     if !RequireAdmin("Toggle Wi-Fi")
         return
-    ; Detect the Wi-Fi adapter name dynamically
-    wifiAdapter := ""
-    try {
-        shell := ComObject("WScript.Shell")
-        exec := shell.Exec('powershell -NoProfile -Command "(Get-NetAdapter -InterfaceType Wi-Fi).Name"')
-        wifiAdapter := Trim(exec.StdOut.ReadAll())
-        ; Remove any newlines (take first result)
-        if InStr(wifiAdapter, "`n")
-            wifiAdapter := Trim(StrSplit(wifiAdapter, "`n", "`r")[1])
-    }
-    if wifiAdapter = "" {
+    ; First physical 802.11 adapter (NdisPhysicalMedium 9) -> "Name|Status".
+    ; [char]124 is "|" (avoids nesting quotes inside the -Command string).
+    out := Trim(RunCapture('powershell -NoProfile -Command "$a = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.NdisPhysicalMedium -eq 9 } | Select-Object -First 1; if ($a) { $a.Name + [char]124 + $a.Status }"'))
+    if !RegExMatch(out, "^([^\r\n|]+)\|(\w+)$", &m) {
         MsgBox("No Wi-Fi adapter detected.", "Wi-Fi Toggle", 48)
         return
     }
-    ; Check current state via PowerShell (Status: Up / Disabled) and toggle
-    try {
-        shell := ComObject("WScript.Shell")
-        exec := shell.Exec("powershell -NoProfile -Command `"(Get-NetAdapter -Name '" wifiAdapter "').Status`"")
-        status := Trim(exec.StdOut.ReadAll())
-        if InStr(status, "Up") || InStr(status, "Connected") {
-            Run('cmd /k netsh interface set interface "' wifiAdapter '" disable')
-            ToolTip(wifiAdapter " disabled")
-        } else {
-            Run('cmd /k netsh interface set interface "' wifiAdapter '" enable')
-            ToolTip(wifiAdapter " enabled")
-        }
-        SetTimer(() => ToolTip(), -2000)
-    } catch as err {
-        MsgBox("Could not toggle Wi-Fi: " err.Message, "Wi-Fi Toggle", 48)
+    wifiAdapter := m[1], status := m[2]
+    ; Status is Up / Disconnected / Disabled — only "Disabled" means switched off
+    if status = "Disabled" {
+        Run('cmd /k netsh interface set interface "' wifiAdapter '" enable')
+        ToolTip(wifiAdapter " enabled")
+    } else {
+        Run('cmd /k netsh interface set interface "' wifiAdapter '" disable')
+        ToolTip(wifiAdapter " disabled")
     }
+    SetTimer(() => ToolTip(), -2000)
 }
 
 ; ============================================================
@@ -44,7 +31,7 @@ ToggleWifi() {
 
 ; --- Restart ---
 SysRestart() {
-    if !RequireAdmin("Restart")
+    if !RequireAdmin("Restart...")
         return
     delay := TbInputBox("Restart delay in seconds (0 = immediate):", "Restart", "w350 h160", "0")
     if delay.Result != "OK"
@@ -66,7 +53,7 @@ SysRestart() {
 
 ; --- Shutdown ---
 SysShutdown() {
-    if !RequireAdmin("Shutdown")
+    if !RequireAdmin("Shutdown...")
         return
     delay := TbInputBox("Shutdown delay in seconds (0 = immediate):", "Shutdown", "w350 h160", "0")
     if delay.Result != "OK"
@@ -88,22 +75,16 @@ SysShutdown() {
 
 ; --- Kill process by name ---
 SysKillProcess() {
-    if !RequireAdmin("Kill process")
+    if !RequireAdmin("Kill process...")
         return
     input := TbInputBox("Enter process name (e.g. notepad.exe):", "Kill Process", "w400 h160")
     if input.Result = "OK" && input.Value != "" {
         procName := Trim(input.Value)
         if !InStr(procName, ".")
             procName .= ".exe"
-        output := ""
-        try {
-            shell := ComObject("WScript.Shell")
-            exec := shell.Exec('taskkill /F /IM "' procName '"')
-            output := exec.StdOut.ReadAll()
-        } catch as err {
-            output := "Error: " err.Message
-        }
-        MsgBox(output, "Kill Process: " procName, 64)
+        ; RunCapture merges stderr — taskkill reports "not found" there
+        output := Trim(RunCapture('taskkill /F /IM "' procName '"'))
+        MsgBox(output != "" ? output : "(no output)", "Kill Process: " procName, 64)
     }
 }
 
@@ -460,9 +441,11 @@ ApplyPowerPlan(choice, plans) {
 SysActivation() {
     psLines := []
     psLines.Push('$names = @{0="Unlicensed"; 1="Licensed"; 2="Out-of-box grace"; 3="Out-of-box grace (ext)"; 4="Non-genuine grace"; 5="Notification"; 6="Extended grace"}')
-    ; ApplicationID 55c92734-... is always the Windows itself; the ''
-    ; WQL strings need single quotes around the GUID; the AHK string is
-    ; double-quoted, so literal `" pairs escape the PS double quotes.
+    ; ApplicationID 55c92734-... is always Windows itself. The WQL filter
+    ; needs single quotes around the GUID — quote char as data (sq), see
+    ; the cheat-sheet in Network.ahk.
+    sq := "'"
+    psLines.Push('$w = Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID=' sq '55c92734-d682-4d71-983e-d6ec3f16059f' sq ' AND PartialProductKey IS NOT NULL" -ErrorAction SilentlyContinue')
     psLines.Push('if (-not $w) { Write-Host "Could not query the licensing service."; exit }')
     psLines.Push('foreach ($x in $w) {')
     psLines.Push('  Write-Host ("Edition: {0}" -f $x.Name)')

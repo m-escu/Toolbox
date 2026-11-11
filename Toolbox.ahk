@@ -87,8 +87,17 @@ FlushMenuThemes()
 ApplyHotkeys()
 
 ; After an auto-elevate relaunch, resume the command that triggered it
-pendingCmd := EnvGet("TOOLBOX_PENDING")
-if pendingCmd != "" {
-    EnvSet("TOOLBOX_PENDING", "")
-    SetTimer(() => RunAndLog(pendingCmd), -1000)
+; (RequireAdmin passes it as:  --pending "<registry label>")
+; Parsed inside a function: a top-level loop variable would become a global
+; and trip #Warn LocalSameAsGlobal in every function using the same name.
+ResumePendingCommand() {
+    global commandRegistry
+    pendingCmd := ""
+    for idx, arg in A_Args {
+        if arg = "--pending" && idx < A_Args.Length
+            pendingCmd := A_Args[idx + 1]
+    }
+    if pendingCmd != "" && commandRegistry.Has(pendingCmd)
+        SetTimer(() => RunAndLog(pendingCmd), -1000)
 }
+ResumePendingCommand()

@@ -84,6 +84,86 @@ RunTests() {
     TbAssert("runcapture echo", InStr(cap, "toolbox-ok"))
 }
 
+; New tests live here with LOCAL variables: RunTests() is assume-global, so
+; names like items/it/m/r there would become globals and trip #Warn
+; (LocalSameAsGlobal) in every lib function using the same local name.
+RunTests2() {
+    global favoritesFile, commandRegistry
+    ; ~80 KB on stderr: deadlocked the old two-pipe Exec version
+    flood := RunCapture('powershell -NoProfile -Command "1..2000 | ForEach-Object { [Console]::Error.WriteLine([string]::new([char]120, 40)) }; Write-Output toolbox-done"')
+    TbAssert("runcapture stderr flood", InStr(flood, "toolbox-done") && InStr(flood, "xxxxxxxx"))
+    TbAssert("runcapture stderr merged", InStr(RunCapture('taskkill /F /IM "toolbox-no-such-proc.exe"'), "toolbox-no-such-proc"))
+
+    ; --- subnet calculator (all three input forms) ---
+    r := SubnetCalc("192.168.1.130 /24")
+    TbAssert("subnet space-cidr", r.ok && IntToIp(r.network) = "192.168.1.0" && r.cidr = 24 && r.hosts = 254)
+    r := SubnetCalc("192.168.1.130/24")
+    TbAssert("subnet slash-cidr", r.ok && IntToIp(r.broadcast) = "192.168.1.255")
+    r := SubnetCalc("  10.0.0.5   255.255.252.0 ")
+    TbAssert("subnet dotted mask", r.ok && r.cidr = 22 && IntToIp(r.network) = "10.0.0.0" && IntToIp(r.broadcast) = "10.0.3.255" && r.hosts = 1022)
+    TbAssert("subnet /32", SubnetCalc("10.1.1.1/32").hosts = 1)
+    TbAssert("subnet noncontiguous", !SubnetCalc("10.0.0.1 255.0.255.0").ok)
+    TbAssert("subnet missing mask", !SubnetCalc("10.0.0.1").ok)
+
+    ; --- JSON parser: escapes + malformed input throws (used to hang) ---
+    j := JsonParse('{"a": "q\"b\\c\/dA\n"}')
+    TbAssert("json escapes", j["a"] = 'q"b\c/dA' "`n")
+    threw := false
+    try JsonParse('{"a": "unterminated')
+    catch
+        threw := true
+    TbAssert("json unterminated throws", threw)
+    threw := false
+    try JsonParse('{"a": 1 "b": 2}')
+    catch
+        threw := true
+    TbAssert("json missing comma throws", threw)
+
+    ; --- menus: build against a scratch INI ---
+    favoritesFile := A_Temp "\toolbox_smoke.ini"
+    Try FileDelete(favoritesFile)
+    FileAppend("", favoritesFile)
+    BuildMenus()
+
+    ; every RequireAdmin label must be a registry label (auto-elevate resumes by it)
+    badLabels := ""
+    Loop Files A_ScriptDir "\..\lib\*.ahk" {
+        src := FileRead(A_LoopFilePath, "UTF-8")
+        pos := 1
+        while pos := RegExMatch(src, 'RequireAdmin\("([^"]+)"\)', &m, pos) {
+            if !commandRegistry.Has(m[1])
+                badLabels .= m[1] "; "
+            pos += m.Len
+        }
+    }
+    TbAssert("admin labels registered" (badLabels != "" ? " (missing: " badLabels ")" : ""), badLabels = "")
+    TbAssert("folder label single backslash", commandRegistry.Has("AppData\Roaming"))
+
+    ; saved layout + known list: new default merged, deliberately removed one stays out
+    k1 := "Open selected in Notepad++", k2 := "Copy paths of selected files"
+    k3 := "Open terminal at current location", k4 := "Open current folder in Explorer"
+    IniWrite("&1. x|" k1, favoritesFile, "Menu", "Files~1")
+    IniWrite("&4. y|" k4, favoritesFile, "Menu", "Files~2")
+    IniWrite(k1, favoritesFile, "MenuKnown", "Files~1")
+    IniWrite(k2, favoritesFile, "MenuKnown", "Files~2")
+    IniWrite(k4, favoritesFile, "MenuKnown", "Files~3")
+    items := GetLayoutItems("Files")
+    TbAssert("layout merges new default", items.Length = 3 && items[2].action = k3 && items[3].action = k4)
+    removedBack := false
+    for it in items
+        if it.action = k2
+            removedBack := true
+    TbAssert("layout keeps removed item out", !removedBack)
+
+    ; legacy layout (no known list): unchanged, baseline written, old "\\" action aliased
+    IniWrite("&2. AppData\\Roaming|AppData\\Roaming", favoritesFile, "Menu", "Folders~1")
+    items := GetLayoutItems("Folders")
+    TbAssert("legacy layout untouched", items.Length = 1 && items[1].action = "AppData\Roaming" && items[1].label = "&2. AppData\Roaming")
+    TbAssert("legacy baseline written", IniRead(favoritesFile, "MenuKnown", "Folders~1", "") != "")
+    Try FileDelete(favoritesFile)
+}
+
 RunTests()
+RunTests2()
 FileAppend(fails = 0 ? "ALL OK" : fails " FAILURES", outFile)
 ExitApp()

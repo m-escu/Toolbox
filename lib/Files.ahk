@@ -5,6 +5,12 @@
 adapterCache := []
 adapterCacheTick := 0
 
+; Windows Terminal installs an app-execution alias here (the real exe under
+; Program Files\WindowsApps is ACL-protected, so FileExist can't see it).
+HasWindowsTerminal() {
+    return FileExist(EnvGet("LOCALAPPDATA") "\Microsoft\WindowsApps\wt.exe") != ""
+}
+
 OpenFolder(path) {
     if DirExist(path) {
         Run('explorer.exe "' path '"')
@@ -144,7 +150,7 @@ OpenTerminalHere() {
     }
 
     termCmd := ""
-    if FileExist("C:\Program Files\WindowsApps\Microsoft.WindowsTerminal_*\WindowsTerminal.exe") || FileExist(userProfile "\AppData\Local\Microsoft.WindowsApps\wt.exe")
+    if HasWindowsTerminal()
         termCmd := 'wt.exe -d "' currentPath '"'
     else
         termCmd := 'cmd /k cd /d "' currentPath '"'
