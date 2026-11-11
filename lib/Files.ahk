@@ -15,8 +15,7 @@ OpenFolder(path) {
     if DirExist(path) {
         Run('explorer.exe "' path '"')
     } else {
-        ToolTip("Folder not found: " path)
-        SetTimer(() => ToolTip(), -2000)
+        Notify("Folder not found: " path, 2000)
     }
 }
 
@@ -49,36 +48,47 @@ GetAdapters(force := false) {
     return adapters.Clone()
 }
 
-OpenSelectedInNpp() {
+; Send Ctrl+C to the active window and return the selected files' paths
+; (CF_HDROP). The previous clipboard content is always restored. Returns
+; [] (with a tooltip) when nothing file-like was selected.
+CopySelectedFiles() {
     savedClip := ClipboardAll()
     A_Clipboard := ""
     Sleep(30)
     Send("^c")
-
-    filesCopied := false
-    loop 20 {
+    filePaths := []
+    loop 20 {  ; up to ~1 s for Explorer to publish the selection
         Sleep(50)
         if DllCall("IsClipboardFormatAvailable", "UInt", 15) {
-            filesCopied := true
+            filePaths := GetFileListFromClipboard()
+            if filePaths.Length = 0
+                Notify("Could not read file paths.", 2000)
             break
         }
+        if A_Index = 20
+            Notify("No files selected.", 2000)
     }
-
-    if !filesCopied {
-        A_Clipboard := savedClip
-        ToolTip("No files selected.")
-        SetTimer(() => ToolTip(), -2000)
-        return
-    }
-
-    filePaths := GetFileListFromClipboard()
     A_Clipboard := savedClip
+    return filePaths
+}
 
-    if filePaths.Length == 0 {
-        ToolTip("Could not read file paths.")
-        SetTimer(() => ToolTip(), -2000)
-        return
+; Folder shown in the active Explorer window, or "" if Explorer isn't active
+GetActiveExplorerPath() {
+    try {
+        for w in ComObject("Shell.Application").Windows {
+            try {
+                if WinActive("ahk_id " w.HWND)
+                    return w.Document.Folder.Self.Path
+            }
+        }
     }
+    return ""
+}
+
+OpenSelectedInNpp() {
+    filePaths := CopySelectedFiles()
+    if filePaths.Length = 0
+        return
 
     cmdLine := '"' nppPath '"'
     for path in filePaths
@@ -86,105 +96,38 @@ OpenSelectedInNpp() {
 
     try {
         Run(cmdLine)
-        ToolTip("Opened " filePaths.Length " file(s) in Notepad++")
-        SetTimer(() => ToolTip(), -1500)
+        Notify("Opened " filePaths.Length " file(s) in Notepad++", 1500)
     } catch as err {
         MsgBox("Failed to launch Notepad++:`n" err.Message, "Error", 48)
     }
 }
 
 CopySelectedPaths() {
-    savedClip := ClipboardAll()
-    A_Clipboard := ""
-    Sleep(30)
-    Send("^c")
-
-    filesCopied := false
-    loop 20 {
-        Sleep(50)
-        if DllCall("IsClipboardFormatAvailable", "UInt", 15) {
-            filesCopied := true
-            break
-        }
-    }
-
-    if !filesCopied {
-        A_Clipboard := savedClip
-        ToolTip("No files selected.")
-        SetTimer(() => ToolTip(), -2000)
+    filePaths := CopySelectedFiles()
+    if filePaths.Length = 0
         return
-    }
-
-    filePaths := GetFileListFromClipboard()
-
-    if filePaths.Length == 0 {
-        A_Clipboard := savedClip
-        ToolTip("Could not read file paths.")
-        SetTimer(() => ToolTip(), -2000)
-        return
-    }
-
-    textPaths := ""
-    for path in filePaths
-        textPaths .= path "`n"
-    textPaths := RTrim(textPaths, "`n")
-
-    A_Clipboard := textPaths
-    ToolTip("Copied " filePaths.Length " path(s) to clipboard")
-    SetTimer(() => ToolTip(), -1500)
+    A_Clipboard := StrJoin(filePaths, "`n")
+    Notify("Copied " filePaths.Length " path(s) to clipboard", 1500)
 }
 
 OpenTerminalHere() {
-    currentPath := ""
-
-    try {
-        shell := ComObject("Shell.Application")
-        for w in shell.Windows {
-            try {
-                if WinActive("ahk_id " w.HWND) {
-                    currentPath := w.Document.Folder.Self.Path
-                    break
-                }
-            }
-        }
-    }
-
-    termCmd := ""
-    if HasWindowsTerminal()
-        termCmd := 'wt.exe -d "' currentPath '"'
-    else
-        termCmd := 'cmd /k cd /d "' currentPath '"'
-
-    if currentPath && DirExist(currentPath) {
-        Run(termCmd, currentPath)
+    currentPath := GetActiveExplorerPath()
+    hasWt := HasWindowsTerminal()
+    if currentPath = "" || !DirExist(currentPath) {
+        Run(hasWt ? "wt.exe" : "cmd /k")
         return
     }
-
-    if InStr(termCmd, "wt.exe")
-        Run("wt.exe")
-    else
-        Run("cmd /k")
+    ; "C:\" would end in \" — which wt's argument parser reads as an
+    ; escaped quote — so pass "C:\." for drive roots
+    dirArg := SubStr(currentPath, -1) = "\" ? currentPath "." : currentPath
+    Run(hasWt ? 'wt.exe -d "' dirArg '"' : 'cmd /k cd /d "' currentPath '"', currentPath)
 }
 
 OpenInExplorer() {
-    currentPath := ""
-
-    try {
-        shell := ComObject("Shell.Application")
-        for w in shell.Windows {
-            try {
-                if WinActive("ahk_id " w.HWND) {
-                    currentPath := w.Document.Folder.Self.Path
-                    break
-                }
-            }
-        }
-    }
-
+    currentPath := GetActiveExplorerPath()
     if currentPath && DirExist(currentPath) {
         Run('explorer.exe "' currentPath '"')
     } else {
-        ToolTip("Could not determine current folder.")
-        SetTimer(() => ToolTip(), -2000)
+        Notify("Could not determine current folder.", 2000)
     }
 }

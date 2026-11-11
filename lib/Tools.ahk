@@ -261,8 +261,10 @@ ToolYtDlp() {
         try FileDelete(tmpBat)
         ; Escape % for batch file context (URLs may contain %XX encoding)
         safeCmd := StrReplace(cmd, "%", "%%")
-        batchLine := ytdlpCmd ' ' safeCmd
-        FileAppend(batchLine, tmpBat, "UTF-8-RAW")  ; no BOM — cmd.exe chokes on it
+        ; chcp 65001 first: cmd reads each following line in the active code
+        ; page, so non-ASCII URLs / paths in the UTF-8 file stay intact.
+        batchText := "@chcp 65001 >nul`r`n" ytdlpCmd " " safeCmd "`r`n"
+        FileAppend(batchText, tmpBat, "UTF-8-RAW")  ; no BOM — cmd.exe chokes on it
 
         ; Persist all settings to INI
         IniWrite(fmtDD.Text, favoritesFile, "YtdlpSettings", "Format")
@@ -524,18 +526,14 @@ ToolHashFile() {
 }
 
 DoHashFile(filePath, algo) {
-    ; Get-FileHash wants the algorithm without the dash: SHA256 / SHA1 / MD5
-    psAlgo := StrReplace(algo, "-", "")
-    dq := '"'
-    sq := "'"
-    cmd := "powershell -NoProfile -Command " dq "(Get-FileHash -LiteralPath " sq StrReplace(filePath, sq, sq sq) sq " -Algorithm " psAlgo ").Hash" dq
-    hash := Trim(RunCapture(cmd))
-    if RegExMatch(hash, "i)^[0-9A-F]{32,64}$") {
-        A_Clipboard := hash
-        MsgBox("File:  " filePath "`nAlgo:  " algo "`nHash:  " hash "`n`n(Hash copied to clipboard)", "File Hash — " algo, 64)
-    } else {
-        MsgBox("Hash failed:`n" hash, "File Hash", 48)
+    ; CNG algorithm ids have no dash: SHA256 / SHA1 / MD5
+    try hash := HashFile(filePath, StrReplace(algo, "-", ""))
+    catch as err {
+        MsgBox("Hash failed:`n" err.Message, "File Hash", 48)
+        return
     }
+    A_Clipboard := hash
+    MsgBox("File:  " filePath "`nAlgo:  " algo "`nHash:  " hash "`n`n(Hash copied to clipboard)", "File Hash — " algo, 64)
 }
 
 ; --- Random password generator (crypto RNG, lookalike chars excluded) ---
@@ -566,22 +564,11 @@ DoPasswordGen(len, preset) {
         : (preset = "Letters + digits")
             ? "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
             : "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*+-_"
-    sq := "'"
-    psLines := []
-    psLines.Push('$abc = ' sq abc sq)
-    psLines.Push('$len = ' len)
-    psLines.Push('$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()')
-    psLines.Push('$out = New-Object System.Text.StringBuilder')
-    psLines.Push('for ($i = 0; $i -lt $len; $i++) {')
-    psLines.Push('  $b = New-Object byte[] 4')
-    psLines.Push('  $rng.GetBytes($b)')
-    psLines.Push('  $idx = [BitConverter]::ToUInt32($b, 0) % $abc.Length')
-    psLines.Push('  [void]$out.Append($abc[$idx])')
-    psLines.Push('}')
-    psLines.Push('$out.ToString()')
-    pw := Trim(PsCapture(psLines, "pwgen"))
-    if pw = "" {
-        MsgBox("Password generation failed.", "Password Generator", 48)
+    ; BCryptGenRandom with rejection sampling (no modulo bias) — instant,
+    ; no PowerShell window
+    try pw := RandomString(len, abc)
+    catch as err {
+        MsgBox("Password generation failed:`n" err.Message, "Password Generator", 48)
         return
     }
     A_Clipboard := pw

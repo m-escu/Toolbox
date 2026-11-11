@@ -47,7 +47,6 @@ ApplyHotkeys() {
             continue  ; conflict with built-in — already warned at registration
         RegisterHotkeySafe(hk, CreateCustomHotkeyAction(target), "Hotkey: " target)
     }
-    SetTimer(() => ToolTip(), -4000)
 }
 
 RegisterHotkeySafe(hk, action, label) {
@@ -56,7 +55,7 @@ RegisterHotkeySafe(hk, action, label) {
         Hotkey(hk, action, "On")  ; "On": probe variants created during save are Off
         registeredHotkeys[hk] := true
     } catch as err
-        ToolTip("Bad hotkey for " label " (`"" hk "`"): " err.Message)
+        Notify("Bad hotkey for " label " (`"" hk "`"): " err.Message, 4000)
 }
 
 ; Custom hotkey target: registered command label if known, else raw command line
@@ -170,34 +169,35 @@ BuildMenus() {
     SpecSep("System")
     SpecAdd("System", "&8. Restart..." Adm() , "Restart...", (*) => SysRestart())
     SpecAdd("System", "&9. Shutdown..." Adm() , "Shutdown...", (*) => SysShutdown())
-    SpecAdd("System", "1&0. Empty Recycle Bin", "Empty Recycle Bin", (*) => FileRecycleEmpty())
-    SpecAdd("System", "1&1. Kill process..." Adm() , "Kill process...", (*) => SysKillProcess())
+    SpecAdd("System", "1&0. Abort pending shutdown / restart", "Abort pending shutdown", (*) => SysAbortShutdown())
+    SpecAdd("System", "1&1. Empty Recycle Bin", "Empty Recycle Bin", (*) => FileRecycleEmpty())
+    SpecAdd("System", "1&2. Kill process..." Adm() , "Kill process...", (*) => SysKillProcess())
     SpecSep("System")
-    SpecAdd("System", "1&2. Copy computer name", "Copy computer name", (*) => CopyInfoItem("computername"))
-    SpecAdd("System", "1&3. Copy local IP address(es)", "Copy local IP", (*) => CopyInfoItem("ip"))
-    SpecAdd("System", "1&4. Copy username", "Copy username", (*) => CopyInfoItem("user"))
-    SpecAdd("System", "1&5. Copy hostname & IP & user", "Copy host info", (*) => CopyInfoItem("all"))
+    SpecAdd("System", "1&3. Copy computer name", "Copy computer name", (*) => CopyInfoItem("computername"))
+    SpecAdd("System", "1&4. Copy local IP address(es)", "Copy local IP", (*) => CopyInfoItem("ip"))
+    SpecAdd("System", "1&5. Copy username", "Copy username", (*) => CopyInfoItem("user"))
+    SpecAdd("System", "1&6. Copy hostname & IP & user", "Copy host info", (*) => CopyInfoItem("all"))
     SpecSep("System")
-    SpecAdd("System", "1&6. Uptime & disk space", "Uptime & disk space", (*) => SysUptimeDisk())
-    SpecAdd("System", "1&7. Recent event log errors", "Event log errors", (*) => SysEventErrors())
-    SpecAdd("System", "1&8. Reduce working set (free RAM)" Adm() , "Reduce working set", (*) => SysReduceWorkingSet())
-    SpecAdd("System", "1&9. Clean temp folder...", "Clean temp folder", (*) => SysCleanTemp())
+    SpecAdd("System", "1&7. Uptime & disk space", "Uptime & disk space", (*) => SysUptimeDisk())
+    SpecAdd("System", "1&8. Recent event log errors", "Event log errors", (*) => SysEventErrors())
+    SpecAdd("System", "1&9. Reduce working set (free RAM)" Adm() , "Reduce working set", (*) => SysReduceWorkingSet())
+    SpecAdd("System", "2&0. Clean temp folder...", "Clean temp folder", (*) => SysCleanTemp())
     SpecSep("System")
-    SpecAdd("System", "2&0. System info summary", "System info summary", (*) => SysInfoSummary())
-    SpecAdd("System", "2&1. Startup programs", "Startup programs", (*) => SysStartupItems())
-    SpecAdd("System", "2&2. Top processes (CPU & RAM)", "Top processes (CPU & RAM)", (*) => SysTopProcesses())
-    SpecAdd("System", "2&3. Running services", "Running services", (*) => SysRunningServices())
-    SpecAdd("System", "2&4. Installed applications", "Installed applications", (*) => SysInstalledApps())
-    SpecAdd("System", "2&5. Windows updates history", "Windows updates history", (*) => SysUpdateHistory())
-    SpecAdd("System", "2&6. Disk health (SMART)", "Disk health (SMART)", (*) => SysDiskHealth())
-    SpecAdd("System", "2&7. Battery status & report", "Battery status & report", (*) => SysBattery())
-    SpecAdd("System", "2&8. Display & GPU info", "Display & GPU info", (*) => SysGpuInfo())
-    SpecAdd("System", "2&9. Installed printers", "Installed printers", (*) => SysPrinters())
-    SpecAdd("System", "3&0. Power plans (switch)...", "Power plans (switch)", (*) => SysPowerPlans())
-    SpecAdd("System", "3&1. Windows activation status", "Windows activation status", (*) => SysActivation())
+    SpecAdd("System", "2&1. System info summary", "System info summary", (*) => SysInfoSummary())
+    SpecAdd("System", "2&2. Startup programs", "Startup programs", (*) => SysStartupItems())
+    SpecAdd("System", "2&3. Top processes (CPU & RAM)", "Top processes (CPU & RAM)", (*) => SysTopProcesses())
+    SpecAdd("System", "2&4. Running services", "Running services", (*) => SysRunningServices())
+    SpecAdd("System", "2&5. Installed applications", "Installed applications", (*) => SysInstalledApps())
+    SpecAdd("System", "2&6. Windows updates history", "Windows updates history", (*) => SysUpdateHistory())
+    SpecAdd("System", "2&7. Disk health (SMART)", "Disk health (SMART)", (*) => SysDiskHealth())
+    SpecAdd("System", "2&8. Battery status & report", "Battery status & report", (*) => SysBattery())
+    SpecAdd("System", "2&9. Display & GPU info", "Display & GPU info", (*) => SysGpuInfo())
+    SpecAdd("System", "3&0. Installed printers", "Installed printers", (*) => SysPrinters())
+    SpecAdd("System", "3&1. Power plans (switch)...", "Power plans (switch)", (*) => SysPowerPlans())
+    SpecAdd("System", "3&2. Windows activation status", "Windows activation status", (*) => SysActivation())
     SpecSep("System")
-    SpecAdd("System", "3&2. Copy Windows product key (OEM)", "Copy Windows product key", (*) => SysCopyProductKey())
-    SpecAdd("System", "3&3. Edit environment variables", "Edit environment variables", (*) => SysEditEnvVars())
+    SpecAdd("System", "3&3. Copy Windows product key (OEM)", "Copy Windows product key", (*) => SysCopyProductKey())
+    SpecAdd("System", "3&4. Edit environment variables", "Edit environment variables", (*) => SysEditEnvVars())
 
     SpecAdd("Clipboard", "&1. Remove duplicate lines", "Remove duplicate lines", (*) => ClipRemoveDuplicates())
     SpecAdd("Clipboard", "&2. Sort lines (A-Z)", "Sort lines (A-Z)", (*) => ClipSortLines())

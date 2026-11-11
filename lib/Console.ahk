@@ -69,17 +69,24 @@ ConsoleShow(title, body) {
         stR.Move(w - 320, h - 30, 308, 18)
     }
 
+    ; The clear timer may fire after the window closed — touching a
+    ; destroyed control throws, hence the try; Close also cancels it.
+    ClearStatus() {
+        try stL.Text := ""
+    }
     CopyClicked(*) {
         A_Clipboard := body
         stL.Text := "Copied " lineCount " lines to clipboard."
-        SetTimer(() => stL.Text := "", -2000)
+        SetTimer(ClearStatus, -2000)
     }
     CloseClicked(*) {
+        SetTimer(ClearStatus, 0)
         for i, c in gOpenConsoles
             if (c = g) {
                 gOpenConsoles.RemoveAt(i)
                 break
             }
+        ForgetGuiColors(g)  ; hwnds get recycled — drop this window's color entries
         g.Destroy()
     }
 

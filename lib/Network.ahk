@@ -4,38 +4,20 @@
 
 ; --- Ping ---
 NetPing() {
-    favs := LoadFavorites("AddressFavorites")
-    prompt := "Enter address to ping:`n" FormatFavoritesPrompt(favs, "Recent addresses: ")
-    addr := TbInputBox(prompt, "Ping", "w500 h320")
-    if addr.Result = "OK" && addr.Value != "" {
-        resolved := ResolveInput(addr.Value, favs)
-        AddFavorite(resolved, "AddressFavorites")
-        Run('cmd /k ping -t "' resolved '"')
-    }
+    if (addr := AskAddress("Enter address to ping:", "Ping")) != ""
+        Run('cmd /k ping -t "' addr '"')
 }
 
 ; --- Traceroute ---
 NetTraceroute() {
-    favs := LoadFavorites("AddressFavorites")
-    prompt := "Enter address to traceroute:`n" FormatFavoritesPrompt(favs, "Recent addresses: ")
-    addr := TbInputBox(prompt, "Traceroute", "w500 h320")
-    if addr.Result = "OK" && addr.Value != "" {
-        resolved := ResolveInput(addr.Value, favs)
-        AddFavorite(resolved, "AddressFavorites")
-        Run('cmd /k tracert "' resolved '"')
-    }
+    if (addr := AskAddress("Enter address to traceroute:", "Traceroute")) != ""
+        Run('cmd /k tracert "' addr '"')
 }
 
 ; --- NS Lookup ---
 NetNslookup() {
-    favs := LoadFavorites("AddressFavorites")
-    prompt := "Enter domain or address:`n" FormatFavoritesPrompt(favs, "Recent addresses: ")
-    addr := TbInputBox(prompt, "NS Lookup", "w500 h320")
-    if addr.Result = "OK" && addr.Value != "" {
-        resolved := ResolveInput(addr.Value, favs)
-        AddFavorite(resolved, "AddressFavorites")
-        Run('cmd /k nslookup "' resolved '"')
-    }
+    if (addr := AskAddress("Enter domain or address:", "NS Lookup")) != ""
+        Run('cmd /k nslookup "' addr '"')
 }
 
 ; --- Flush DNS ---
@@ -125,34 +107,55 @@ ManualStaticForAdapter(chosenAdapter) {
 ; Actually apply the static IP(s) and save profile
 ApplyStaticIp(adapter, ip, mask, gw, dns) {
     ips := ParseIpList(ip)
+    if ips.Length = 0 {
+        MsgBox("No IP address given.", "Set Static IP", 48)
+        return
+    }
     output := ""
+    rc := 0
+    addrFailed := false
 
-    ; First IP: use "set address" (sets/replaces primary)
-    if ips.Length > 0 {
-        cmd := 'netsh interface ip set address "' adapter '" static ' ips[1] ' ' mask
-        if gw != ""
-            cmd .= ' ' gw
-        output .= RunCapture(cmd) "`n"
+    ; First IP: use "set address" (sets/replaces primary). netsh prints
+    ; nothing on success and exits 1 on failure.
+    cmd := 'netsh interface ip set address "' adapter '" static ' ips[1] ' ' mask
+    if gw != ""
+        cmd .= ' ' gw
+    output .= RunCapture(cmd, &rc) "`n"
+    addrFailed := rc != 0
 
-        ; Additional IPs: use "add address" (secondary IPs on same interface)
-        loop ips.Length - 1
-            output .= RunCapture('netsh interface ip add address "' adapter '" ' ips[A_Index + 1] ' ' mask) "`n"
+    ; Additional IPs: use "add address" (secondary IPs on same interface)
+    loop ips.Length - 1 {
+        output .= RunCapture('netsh interface ip add address "' adapter '" ' ips[A_Index + 1] ' ' mask, &rc) "`n"
+        if rc != 0
+            addrFailed := true
     }
 
-    if dns != ""
-        output .= RunCapture('netsh interface ip set dns "' adapter '" static ' dns) "`n"
+    ; DNS failures are reported separately: netsh also exits 1 when it merely
+    ; can't reach the new server ("configured DNS server is incorrect"),
+    ; although the setting was applied.
+    dnsFailed := false
+    if dns != "" {
+        output .= RunCapture('netsh interface ip set dns "' adapter '" static ' dns, &rc) "`n"
+        dnsFailed := rc != 0
+    }
 
-    ; Save to favorites
-    try AddIpProfile(adapter, ip, mask, gw, dns)
+    ; Only remember profiles that actually applied
+    if !addrFailed
+        try AddIpProfile(adapter, ip, mask, gw, dns)
 
-    ; Show result in a message box so the user actually sees it
     msg := "Adapter: " adapter "`nIP(s): " ip "`nMask: " mask
     if gw != ""
         msg .= "`nGW: " gw
     if dns != ""
         msg .= "`nDNS: " dns
-    msg .= "`n`nnetsh output:`n" output
-    MsgBox(msg, "Static IP Applied", 64)
+    if Trim(output, " `t`r`n") != ""
+        msg .= "`n`nnetsh output:`n" Trim(output, " `t`r`n")
+    if addrFailed
+        MsgBox(msg "`n`n(Not saved as a profile.)", "Static IP — FAILED", 16)
+    else if dnsFailed
+        MsgBox(msg, "Static IP Applied (DNS warning)", 48)
+    else
+        MsgBox(msg, "Static IP Applied", 64)
 }
 
 ; --- Set adapter to DHCP (popup menu pick) ---
@@ -168,15 +171,19 @@ NetSetDhcp() {
 }
 
 ApplyDhcp(chosenAdapter) {
-    ; Use PowerShell to properly remove static IPs and enable DHCP
-    psScript := 'Remove-NetIPAddress -InterfaceAlias "' chosenAdapter '" -Confirm:$false -ErrorAction SilentlyContinue' "`n"
-    psScript .= 'Set-NetIPInterface -InterfaceAlias "' chosenAdapter '" -Dhcp Enabled' "`n"
+    ; Remove the static IPv4 config completely — addresses, the static default
+    ; route (else the old gateway lingers next to the DHCP one) and the static
+    ; DNS servers — then turn DHCP on. IPv6 (incl. link-local) is left alone.
+    psLines := []
+    psLines.Push('$a = ' PsQuote(chosenAdapter))
+    psLines.Push('Remove-NetIPAddress -InterfaceAlias $a -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue')
+    psLines.Push('Remove-NetRoute -InterfaceAlias $a -DestinationPrefix 0.0.0.0/0 -Confirm:$false -ErrorAction SilentlyContinue')
+    psLines.Push('Set-NetIPInterface -InterfaceAlias $a -AddressFamily IPv4 -Dhcp Enabled')
+    psLines.Push('Set-DnsClientServerAddress -InterfaceAlias $a -ResetServerAddresses')
+    output := Trim(PsCapture(psLines, "set_dhcp"), " `t`r`n")
 
-    tmpPs := WriteTempPs("toolbox_set_dhcp.ps1", psScript)
-    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '" 2>&1')
-    Try FileDelete(tmpPs)
-
-    MsgBox("Adapter: " chosenAdapter " set to DHCP`n`nOutput:`n" output, "DHCP Applied", 64)
+    MsgBox("Adapter: " chosenAdapter " set to DHCP (address, gateway and DNS)"
+        . (output != "" ? "`n`nOutput:`n" output : ""), "DHCP Applied", 64)
 }
 
 ; --- Port check ---
@@ -187,46 +194,52 @@ NetPortCheck() {
     if input.Result != "OK" || input.Value = ""
         return
 
-    ; If they typed a favorite number, resolve it (could be comma-separated numbers or values)
-    rawInput := input.Value
-    resolvedParts := []
-    for part in StrSplit(rawInput, ",") {
-        part := Trim(part)
-        if part = ""
-            continue
-        resolved := ResolveInput(part, favs)
-        resolvedParts.Push(resolved)
-        ; Save each resolved target as a favorite
-        AddFavorite(resolved, "PortFavorites")
-    }
-
-    ; Parse targets
+    ; Each comma-separated part may be a favorite number; every target must
+    ; be host:port with a valid host and port 1-65535. Only valid ones are
+    ; remembered; invalid ones are listed instead of silently dropped.
     targets := []
-    for entry in resolvedParts {
-        entry := Trim(entry)
+    invalid := ""
+    for part in StrSplit(input.Value, ",") {
+        entry := Trim(ResolveInput(Trim(part), favs))
         if entry = ""
             continue
-        parts := StrSplit(entry, ":")
-        if parts.Length >= 2 {
-            ip := Trim(parts[1])
-            port := Trim(parts[2])
-            if ip != "" && RegExMatch(port, "^\d+$") && Integer(port) > 0
-                targets.Push({ip: ip, port: Integer(port)})
-        }
+        if RegExMatch(entry, "^([^:]+):(\d{1,5})$", &m) && IsValidAddress(entry, "host:port") {
+            targets.Push({ip: m[1], port: Integer(m[2])})
+            AddFavorite(entry, "PortFavorites")
+        } else
+            invalid .= "  " entry "`n"
     }
 
     if targets.Length == 0 {
-        MsgBox("No valid IP:port entries found.", "Port Check", 48)
+        MsgBox("No valid host:port entries found." (invalid != "" ? "`n`nInvalid:`n" invalid : ""), "Port Check", 48)
         return
     }
+    if invalid != ""
+        Notify("Skipped invalid: " StrReplace(Trim(invalid), "`n", ", "), 4000)
 
-    ; Build PowerShell script and write to script directory (avoids A_Temp issues)
-    psLines := ""
+    ; ConnectAsync + Wait(timeout): a plain Connect() waits ~21 s on a
+    ; filtered port. Refused -> CLOSED; no answer in time -> FILTERED.
+    ; 3 s, not less: Windows retries the SYN after a RST, so even a refused
+    ; port takes ~2.1 s to report. Name lookup is done first so a DNS
+    ; failure isn't mislabelled as FILTERED.
+    psLines := []
+    psLines.Push('function Test-Port([string]$h, [int]$p) {')
+    psLines.Push('  try { $ip = [System.Net.Dns]::GetHostAddresses($h) | Select-Object -First 1 }')
+    psLines.Push('  catch { Write-Host ("{0}:{1} - DNS lookup failed" -f $h, $p) -ForegroundColor Red; return }')
+    psLines.Push('  $tcp = New-Object System.Net.Sockets.TcpClient($ip.AddressFamily)')
+    psLines.Push('  $sw = [System.Diagnostics.Stopwatch]::StartNew()')
+    psLines.Push('  try {')
+    psLines.Push('    if ($tcp.ConnectAsync($ip, $p).Wait(3000)) { $s = "OPEN (" + $sw.ElapsedMilliseconds + " ms)"; $c = "Green" }')
+    psLines.Push('    else { $s = "FILTERED (no reply within 3 s)"; $c = "DarkYellow" }')
+    psLines.Push('  } catch { $s = "CLOSED - " + $_.Exception.GetBaseException().Message; $c = "Red" }')
+    psLines.Push('  $tcp.Close()')
+    psLines.Push('  Write-Host ("{0}:{1} - {2}" -f $h, $p, $s) -ForegroundColor $c')
+    psLines.Push('}')
     for t in targets
-        psLines .= '$tcp = New-Object System.Net.Sockets.TcpClient; $sw = [System.Diagnostics.Stopwatch]::StartNew(); try { $tcp.Connect("' t.ip '", ' t.port '); $tcp.Close(); Write-Host ("' t.ip ':' t.port ' - OPEN (" + $sw.ElapsedMilliseconds + "ms)") } catch { Write-Host "' t.ip ':' t.port ' - CLOSED" }; $sw.Stop()' "`n"
-    psLines .= 'Write-Host ""; Write-Host "Done. Press any key to close."; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")'
+        psLines.Push('Test-Port ' PsQuote(t.ip) ' ' t.port)
+    psLines.Push('Write-Host ""; Write-Host "Done. Press any key to close."; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")')
 
-    tmpPs := WriteTempPs("toolbox_portcheck.ps1", psLines)
+    tmpPs := PsWrite(psLines, "portcheck")
     try {
         RunTempPsVisible(tmpPs, "", false, "Port Check")
     } catch as err {
@@ -237,15 +250,17 @@ NetPortCheck() {
 }
 
 ; --- Browse to device (open IP in browser) ---
+; Type http:// or https:// to pick directly; a bare address asks which
+; (many routers / PLCs / printers only serve plain http).
 NetBrowseToDevice() {
-    favs := LoadFavorites("AddressFavorites")
-    prompt := "Enter IP address or hostname:`n(e.g. 192.168.1.10)`n`n" FormatFavoritesPrompt(favs, "Recent addresses: ")
-    addr := TbInputBox(prompt, "Browse to Device", "w500 h320")
-    if addr.Result = "OK" && addr.Value != "" {
-        resolved := ResolveInput(addr.Value, favs)
-        AddFavorite(resolved, "AddressFavorites")
-        Run("https://" Trim(resolved))
-    }
+    addr := AskAddress("Enter IP address or hostname (optionally :port, /path):`n(e.g. 192.168.1.10 — or http://... / https://... to skip the choice)"
+        , "Browse to Device", "url")
+    if addr = ""
+        return
+    if RegExMatch(addr, "i)^https?://")
+        Run(addr)
+    else
+        ShowPickMenu(["https://" addr, "http://" addr], (url) => Run(url))
 }
 
 ; --- ARP table ---
@@ -256,8 +271,7 @@ NetArpTable() {
         return
     }
     ShowText("ARP Table", arpOutput)
-    ToolTip("ARP table opened")
-    SetTimer(() => ToolTip(), -1500)
+    Notify("ARP table opened", 1500)
 }
 
 ; --- Route table ---
@@ -268,51 +282,80 @@ NetRoutePrint() {
         return
     }
     ShowText("Route Table", routeOutput)
-    ToolTip("Route table opened")
-    SetTimer(() => ToolTip(), -1500)
+    Notify("Route table opened", 1500)
 }
 
 ; --- Add route ---
+; Admin is checked FIRST (auto-elevate relaunches — typed input would be lost).
 NetRouteAdd() {
-    dest := TbInputBox("Destination network (e.g. 10.0.0.0)", "Add Route", "w400 h150").Value
-    if dest = ""
-        return
-    mask := TbInputBox("Subnet mask (e.g. 255.255.255.0)", "Add Route — Mask", "w400 h150").Value
-    if mask = ""
-        return
-    gateway := TbInputBox("Gateway (e.g. 192.168.1.1)", "Add Route — Gateway", "w400 h150").Value
-    if gateway = ""
-        return
-    metric := TbInputBox("Metric (optional, leave blank for auto)", "Add Route — Metric", "w400 h150").Value
-
     if !RequireAdmin("Add route...")
         return
-
-    cmd := 'route add ' dest ' mask ' mask ' ' gateway
-    if metric != ""
-        cmd .= ' metric ' metric
-    cmd .= ' -p'  ; make persistent
-
-    Run('cmd /k ' cmd)
+    r := AskRoute("Add Route", true)
+    if r = ""
+        return
+    cmd := 'route add ' r.dest ' mask ' r.mask ' ' r.gw
+    if r.metric != ""
+        cmd .= ' metric ' r.metric
+    Run('cmd /k ' cmd ' -p')  ; -p: persistent
 }
 
 ; --- Delete route ---
 NetRouteDelete() {
-    dest := TbInputBox("Destination network to remove (e.g. 10.0.0.0)", "Delete Route", "w400 h150").Value
-    if dest = ""
-        return
-    mask := TbInputBox("Subnet mask (e.g. 255.255.255.0)", "Delete Route — Mask", "w400 h150").Value
-    if mask = ""
-        return
-    gateway := TbInputBox("Gateway (e.g. 192.168.1.1)", "Delete Route — Gateway", "w400 h150").Value
-    if gateway = ""
-        return
-
     if !RequireAdmin("Delete route...")
         return
+    r := AskRoute("Delete Route", false)
+    if r != ""
+        Run('cmd /k route delete ' r.dest ' mask ' r.mask ' ' r.gw)
+}
 
-    cmd := 'route delete ' dest ' mask ' mask ' ' gateway
-    Run('cmd /k ' cmd)
+; Prompt for destination / mask / gateway (/ metric), each validated and
+; re-asked until valid or cancelled. Returns {dest, mask, gw, metric} with
+; the mask in dotted form (CIDR "/24" accepted), or "" on cancel.
+AskRoute(title, withMetric) {
+    dest := AskValidated("Destination network (e.g. 10.0.0.0)", title, "", (v) => IpToInt(v) >= 0 ? "" : "Not an IPv4 address.")
+    if dest = ""
+        return ""
+    CheckMask(v) {
+        r := SubnetCalc(dest " " v)
+        if !r.ok
+            return r.error
+        if r.network != IpToInt(dest)  ; host bits set: route.exe rejects it
+            return dest " has host bits set for this mask — did you mean " IntToIp(r.network) "?"
+        return ""
+    }
+    mask := AskValidated("Subnet mask (e.g. 255.255.255.0 or /24)", title " — Mask", "255.255.255.0", CheckMask)
+    if mask = ""
+        return ""
+    gw := AskValidated("Gateway (e.g. 192.168.1.1)", title " — Gateway", "", (v) => IpToInt(v) >= 0 ? "" : "Not an IPv4 address.")
+    if gw = ""
+        return ""
+    metric := ""
+    if withMetric {
+        m := TbInputBox("Metric (optional, 1-9999, leave blank for auto)", title " — Metric", "w400 h150")
+        if m.Result != "OK"
+            return ""
+        metric := Trim(m.Value)
+        if metric != "" && !(RegExMatch(metric, "^\d{1,4}$") && Integer(metric) >= 1) {
+            MsgBox("Metric must be a number from 1 to 9999.", title, 48)
+            return ""
+        }
+    }
+    return {dest: dest, mask: IntToIp(ParseMask(mask)), gw: gw, metric: metric}
+}
+
+; TbInputBox that re-asks (pre-filled) until check(value) returns "" (= OK).
+; Returns the trimmed value, or "" when cancelled / left empty.
+AskValidated(prompt, title, defaultVal, check) {
+    value := defaultVal
+    loop {
+        r := TbInputBox(prompt, title, "w400 h150", value)
+        if r.Result != "OK" || Trim(r.Value) = ""
+            return ""
+        value := Trim(r.Value)
+        if (err := check(value)) = ""
+            return value
+        MsgBox(err, title, 48)
+    }
 }
 
 ; --- Reset routes / re-register DNS ---
@@ -335,13 +378,12 @@ NetWakeOnLan() {
         return
 
     resolved := ResolveInput(input.Value, favs)
-    AddFavorite(resolved, "MacFavorites")
-
-    mac := RegExReplace(resolved, "[-\s]", ":")
-    if !RegExMatch(mac, "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$") {
+    mac := StrUpper(RegExReplace(Trim(resolved), "[-\s]", ":"))
+    if !RegExMatch(mac, "^([0-9A-F]{2}:){5}[0-9A-F]{2}$") {
         MsgBox("Invalid MAC address format.`nExpected: AA:BB:CC:DD:EE:FF", "Wake-on-LAN", 48)
         return
     }
+    AddFavorite(mac, "MacFavorites")  ; only valid MACs, in one normalized form
 
     ; Build magic packet hex: 6 bytes FF + 16x MAC (colons stripped — hex pairs!)
     macHex := StrReplace(mac, ":")
@@ -357,11 +399,10 @@ NetWakeOnLan() {
 
     psCmd := '$bytes = [byte[]](' byteList '); $udp = New-Object System.Net.Sockets.UdpClient; $udp.Connect([System.Net.IPAddress]::Broadcast, 9); $udp.Send($bytes, $bytes.Length); $udp.Close(); Write-Host "Magic packet sent to ' mac '"'
 
-    tmpPs := WriteTempPs("toolbox_wol.ps1", psCmd)
+    tmpPs := PsWrite([psCmd], "wol")
     try {
         RunTempPsVisible(tmpPs, "", false, "Wake-on-LAN")
-        ToolTip("WOL magic packet sent to " mac)
-        SetTimer(() => ToolTip(), -2000)
+        Notify("WOL magic packet sent to " mac, 2000)
     } catch as err {
         MsgBox("Failed to send WOL packet:`n" err.Message, "Wake-on-LAN", 48)
     }
@@ -369,33 +410,21 @@ NetWakeOnLan() {
 
 ; --- SSH to device ---
 NetSsh() {
-    favs := LoadFavorites("AddressFavorites")
-    prompt := "Enter IP or hostname for SSH:`n`n" FormatFavoritesPrompt(favs, "Recent addresses: ")
-    input := TbInputBox(prompt, "SSH to Device", "w500 h350")
-    if input.Result != "OK" || input.Value = ""
+    addr := AskAddress("Enter IP or hostname for SSH (optionally user@host):", "SSH to Device", "user@host", "w500 h350")
+    if addr = ""
         return
-
-    resolved := ResolveInput(input.Value, favs)
-    AddFavorite(resolved, "AddressFavorites")
-
     ; Try Windows Terminal SSH first, then fall back to cmd
     if HasWindowsTerminal()
-        Run('wt.exe ssh "' resolved '"')
+        Run('wt.exe ssh "' addr '"')
     else
-        Run('cmd /k ssh "' resolved '"')
+        Run('cmd /k ssh "' addr '"')
 }
 
 ; --- RDP to device ---
 NetRdp() {
-    favs := LoadFavorites("AddressFavorites")
-    prompt := "Enter IP or hostname for RDP:`n`n" FormatFavoritesPrompt(favs, "Recent addresses: ")
-    input := TbInputBox(prompt, "RDP to Device", "w500 h350")
-    if input.Result != "OK" || input.Value = ""
-        return
-
-    resolved := ResolveInput(input.Value, favs)
-    AddFavorite(resolved, "AddressFavorites")
-    Run('mstsc /v:"' resolved '"')
+    addr := AskAddress("Enter IP or hostname for RDP (optionally :port):", "RDP to Device", "host:port", "w500 h350")
+    if addr != ""
+        Run('mstsc /v:"' addr '"')
 }
 
 ; --- Scan subnet: async ping sweep of a /24 + DNS resolve ---
@@ -434,10 +463,7 @@ NetIpScanner() {
     psLines.Push('Write-Host ("Done. {0} host(s) responded." -f $alive.Count) -ForegroundColor Cyan')
     psLines.Push('Write-Host "Press any key to close..."')
     psLines.Push('$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")')
-    psScript := ""
-    for , line in psLines
-        psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_scan.ps1", psScript)
+    tmpPs := PsWrite(psLines, "scan")
     RunTempPsVisible(tmpPs, "", false, "Subnet Scanner")
 }
 
@@ -574,17 +600,14 @@ NetSpeedTest() {
     psLines.Push('}')
     psLines.Push('')
     psLines.Push('Write-Host "`nDone." -ForegroundColor Cyan')
-    psScript := ""
-    for , line in psLines
-        psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_speedtest.ps1", psScript)
+    tmpPs := PsWrite(psLines, "speedtest")
     RunTempPsVisible(tmpPs, "", true, "Internet Speed Test")  ; -NoExit: window stays open even on crash
 }
 
 ; ============================================================
 ; PS-BASED INFO TOOLS
 ; One recipe, many tools: build a small PowerShell script in an
-; array, run it hidden with PsCapture(), show the text in the
+; array, run it hidden in the background (PsShowAsync), show the text in the
 ; themed output console via ShowText(). Nothing is written to
 ; disk except the temp .ps1 (auto-deleted after the run).
 ;
@@ -606,7 +629,7 @@ NetDnsCache() {
     psLines.Push('    Format-Table -AutoSize | Out-String -Width 160')
     psLines.Push('Write-Host ""')
     psLines.Push('Write-Host ("{0} entrie(s) in the DNS cache." -f ($c | Measure-Object).Count)')
-    ShowText("DNS Cache", PsCapture(psLines, "dnscache"))
+    PsShowAsync(psLines, "dnscache", "DNS Cache")
 }
 
 ; --- Show current Wi-Fi connection details (SSID, channel, speed) ---
@@ -649,7 +672,7 @@ NetWifiPasswords() {
     psLines.Push('  else { $detail | ForEach-Object { Write-Host ("  " + $_) } }')
     psLines.Push('  Write-Host ""')
     psLines.Push('}')
-    ShowText("Wi-Fi Profiles & Passwords", PsCapture(psLines, "wifipw"))
+    PsShowAsync(psLines, "wifipw", "Wi-Fi Profiles & Passwords")
 }
 
 ; --- Show TCP ports that are listening + the process that owns them ---
@@ -663,7 +686,7 @@ NetListeningPorts() {
     psLines.Push('$rows | Sort-Object Port, Address | Format-Table -AutoSize | Out-String -Width 120')
     psLines.Push('Write-Host ""')
     psLines.Push('Write-Host "Tip: system services may show as ? unless Toolbox runs as admin."')
-    ShowText("Listening Ports (TCP)", PsCapture(psLines, "ports"))
+    PsShowAsync(psLines, "ports", "Listening Ports (TCP)")
 }
 
 ; --- Show folders this PC shares on the network (SMB) ---
@@ -675,7 +698,7 @@ NetSmbShares() {
     psLines.Push('  exit')
     psLines.Push('}')
     psLines.Push('$s | Select-Object Name, Path, Description | Format-Table -AutoSize | Out-String -Width 200')
-    ShowText("Shared Folders (SMB)", PsCapture(psLines, "smb"))
+    PsShowAsync(psLines, "smb", "Shared Folders (SMB)")
 }
 
 ; --- Show public IP / ISP and copy the IP to the clipboard ---
@@ -687,13 +710,14 @@ NetPublicIp() {
     psLines.Push('  Write-Host ("ISP:     {0}" -f $m.org)')
     psLines.Push('  Write-Host ("City:    {0}, {1}, {2}" -f $m.city, $m.region, $m.country)')
     psLines.Push('} catch { Write-Host ("Lookup failed: " + $_.Exception.Message) }')
-    output := PsCapture(psLines, "publicip")
-    if RegExMatch(output, "IP:\s+(\S+)", &m) {
-        A_Clipboard := Trim(m[1])
-        ToolTip("IP copied to clipboard")
-        SetTimer(() => ToolTip(), -1500)
+    Done(output, *) {
+        if RegExMatch(output, "IP:\s+(\S+)", &m) {
+            A_Clipboard := Trim(m[1])
+            Notify("IP copied to clipboard", 1500)
+        }
+        ShowText("Public IP", output)
     }
-    ShowText("Public IP", output)
+    PsCaptureAsync(psLines, "publicip", Done, "Public IP")
 }
 
 ; --- Test a website: HTTP status code + response time ---
@@ -723,7 +747,7 @@ NetTestWebsite() {
     psLines.Push('  if ($code) { Write-Host ("{0} -> HTTP {1}  ({2:N0} ms)" -f $u, $code, $sw.Elapsed.TotalMilliseconds) }')
     psLines.Push('  else { Write-Host ("{0} -> FAILED: {1}" -f $u, $_.Exception.Message) }')
     psLines.Push('}')
-    ShowText("Website Test", PsCapture(psLines, "webtest"))
+    PsShowAsync(psLines, "webtest", "Website Test")
 }
 
 ; --- Show the hosts file (static name overrides) ---

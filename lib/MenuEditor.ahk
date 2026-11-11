@@ -134,8 +134,7 @@ ShowMenuEditor() {
     AddItem() {
         it := ItemFromFields()
         if !it {
-            ToolTip("Target is required.")
-            SetTimer(() => ToolTip(), -3000)
+            Notify("Target is required.", 3000)
             return
         }
         sec := ddlSection.Text
@@ -158,14 +157,12 @@ ShowMenuEditor() {
     UpdateItem() {
         row := lv.GetNext()
         if row && row <= allModels[ddlSection.Text].Length && allModels[ddlSection.Text][row].kind != "item" {
-            ToolTip("Separators and submenus can't be edited — reorder or remove them instead.")
-            SetTimer(() => ToolTip(), -3000)
+            Notify("Separators and submenus can't be edited — reorder or remove them instead.", 3000)
             return
         }
         it := ItemFromFields()
         if !row || !it {
-            ToolTip("Select a row and fill in the fields.")
-            SetTimer(() => ToolTip(), -3000)
+            Notify("Select a row and fill in the fields.", 3000)
             return
         }
         allModels[ddlSection.Text][row] := it
@@ -204,8 +201,7 @@ ShowMenuEditor() {
         for it in GetDefaultItems(sec)
             allModels[sec].Push({kind: it.kind, label: it.label, action: it.action})
         LoadSection(sec)
-        ToolTip("Section reset to app defaults (save to apply).")
-        SetTimer(() => ToolTip(), -3000)
+        Notify("Section reset to app defaults (save to apply).", 3000)
     }
 
     SaveAndRebuild() {
@@ -214,8 +210,7 @@ ShowMenuEditor() {
         g.Destroy()
         BuildMenus()
         FlushMenuThemes()
-        ToolTip("Menu layout saved & rebuilt.")
-        SetTimer(() => ToolTip(), -3000)
+        Notify("Menu layout saved & rebuilt.", 3000)
     }
 
     LoadSection(sectionOrder[1])

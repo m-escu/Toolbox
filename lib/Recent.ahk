@@ -88,7 +88,6 @@ ClearRecents() {
         return
     IniDelete(favoritesFile, recentSection)
     RebuildRecentMenu()
-    ToolTip("Recent commands cleared")
-    SetTimer(() => ToolTip(), -1500)
+    Notify("Recent commands cleared", 1500)
 }
 

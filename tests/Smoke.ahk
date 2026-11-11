@@ -161,9 +161,162 @@ RunTests2() {
     TbAssert("legacy layout untouched", items.Length = 1 && items[1].action = "AppData\Roaming" && items[1].label = "&2. AppData\Roaming")
     TbAssert("legacy baseline written", IniRead(favoritesFile, "MenuKnown", "Folders~1", "") != "")
     Try FileDelete(favoritesFile)
+
+    names := GetRegisteredCommandNames()
+    sorted := names.Length > 10
+    loop names.Length - 1
+        if StrCompare(names[A_Index], names[A_Index + 1]) > 0
+            sorted := false
+    TbAssert("command names sorted", sorted)
 }
 
-RunTests()
-RunTests2()
+; Clipboard text functions, CNG helpers, misc (locals only — see RunTests2)
+RunTests3() {
+    ; URL encode: whole-string UTF-8, emoji (surrogate pair) stays one char
+    TbAssert("urlencode ascii", UrlEncode("a b/c-d_e.f~g") = "a%20b%2Fc-d_e.f~g")
+    TbAssert("urlencode utf8+emoji", UrlEncode(Chr(233) Chr(0x1F600)) = "%C3%A9%F0%9F%98%80")
+
+    ; &amp; decoded last: "&amp;lt;" is the literal text "&lt;"
+    TbAssert("html amp last", HtmlToText("<b>a</b> &amp;lt; &lt;x&gt;") = "a &lt; <x>")
+    TbAssert("html numeric", HtmlToText("&#65;&#x42;<br/>c") = "AB`nc")
+
+    TbAssert("sort asc", SortLines("b`r`nA`r`nc`r`n") = "A`nb`nc")
+    TbAssert("sort desc", SortLines("b`nA`nc", true) = "c`nb`nA")
+    removed := 0
+    TbAssert("dedupe", DedupeLines("a`n a`nb`n`na", &removed) = "a`nb" && removed = 3)
+    TbAssert("strjoin keeps trailing sep chars", StrJoin(["a,", "b,"], ",") = "a,,b,")
+    TbAssert("psquote", PsQuote("it's") = "'it''s'")
+
+    ; CNG hashing (known vectors for "abc")
+    TbAssert("sha256", HashText("abc") = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD")
+    TbAssert("sha1", HashText("abc", "SHA1") = "A9993E364706816ABA3E25717850C26C9CD0D89D")
+    TbAssert("md5", HashText("abc", "MD5") = "900150983CD24FB0D6963F7D28E17F72")
+    tmpF := A_Temp "\toolbox_smoke_hash.txt"
+    Try FileDelete(tmpF)
+    FileAppend("abc", tmpF, "UTF-8-RAW")
+    TbAssert("hash file", HashFile(tmpF) = HashText("abc"))
+    Try FileDelete(tmpF)
+
+    pw := RandomString(64, "AB")
+    TbAssert("random string", StrLen(pw) = 64 && RegExMatch(pw, "^[AB]+$") && InStr(pw, "A") && InStr(pw, "B"))
+    TbAssert("guid", RegExMatch(NewGuid(), "^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$") && NewGuid() != NewGuid())
+
+    rc := 0
+    RunCapture("exit 3", &rc)
+    TbAssert("runcapture exit code", rc = 3)
+    Notify("smoke", 10)
+    TbAssert("notify", true)
+}
+
+; Round trips, ranking, validation, background runner, integrity checks
+RunTests4() {
+    global favoritesFile
+
+    ; --- hotkey syntax <-> friendly form ---
+    rt := true
+    for hk in ["^+m", "^!t", "#e", "+F5", "^!Delete", "!Space", "^+NumpadAdd"]
+        if FriendlyToHk(HkToFriendly(hk)) != hk
+            rt := false, TbAssert("hotkey roundtrip " hk " -> " HkToFriendly(hk), false)
+    TbAssert("hotkey roundtrip raw->friendly->raw", rt)
+    TbAssert("hotkey roundtrip friendly", HkToFriendly(FriendlyToHk("Ctrl+Alt+Q")) = "Ctrl+Alt+Q")
+    TbAssert("hotkey typo rejected", FriendlyToHk("Ctrl+Shit+Q") = "")
+
+    ; --- menu layout save -> load round trip (sep, renamed item, raw run:) ---
+    favoritesFile := A_Temp "\toolbox_smoke_layout.ini"
+    Try FileDelete(favoritesFile)
+    FileAppend("", favoritesFile)
+    saved := [{kind: "item", label: "Renamed NPP", action: "Open selected in Notepad++"}
+        , {kind: "sep", label: "", action: ""}
+        , {kind: "item", label: "Calc", action: "run:calc.exe"}
+        , {kind: "item", label: "Open current folder in Explorer", action: "Open current folder in Explorer"}]
+    SaveMenuLayout(Map("Files", saved))
+    loaded := GetLayoutItems("Files")
+    same := loaded.Length = saved.Length
+    if same
+        for i, it in saved
+            if loaded[i].kind != it.kind || loaded[i].label != it.label || loaded[i].action != it.action
+                same := false
+    TbAssert("layout roundtrip (removed defaults stay out)", same)
+    TbAssert("layout value forms", LayoutValue(saved[2]) = "-" && LayoutValue(saved[1]) = "Renamed NPP|Open selected in Notepad++"
+        && LayoutValue(saved[4]) = "Open current folder in Explorer" && LayoutValue({kind: "sub", label: "NirSoft", action: "@"}) = "NirSoft|@")
+    Try FileDelete(favoritesFile)
+
+    ; --- palette ranking ---
+    TbAssert("rank prefix > word start", PaletteScore("ping", "ping address...") < PaletteScore("ping", "scan subnet (ping sweep)"))
+    TbAssert("rank word start > mid-word", PaletteScore("ping", "scan subnet (ping sweep)") < PaletteScore("ping", "shopping list"))
+    TbAssert("rank substring > scattered", PaletteScore("dns", "flush dns") < PaletteScore("dns", "add new site"))
+    TbAssert("rank initials", PaletteScore("tw", "toggle wi-fi") < PaletteScore("tw", "network tools"))
+    TbAssert("rank recent boost", PaletteScore("sh", "show ip config", 1) < PaletteScore("sh", "show ip config"))
+    TbAssert("rank no match", PaletteScore("zzz", "ping address...") = -1)
+    TbAssert("word initials", WordInitials("toggle wi-fi") = "twf")
+
+    ; --- address validation ---
+    good := ["192.168.1.1", "router.lan", "example.com.", "fe80::1%12", "::1", "my_host-01"]
+    bad := ["999.1.1.1", "1.2.3", 'a" & calc', "host name", "a|b", ""]
+    okAll := true
+    for s in good
+        if !IsValidHost(s)
+            okAll := false, TbAssert("host should be valid: " s, false)
+    for s in bad
+        if IsValidHost(s)
+            okAll := false, TbAssert("host should be invalid: " s, false)
+    TbAssert("host validation", okAll)
+    TbAssert("user@host", IsValidAddress("admin@10.0.0.1", "user@host") && !IsValidAddress("a b@x", "user@host"))
+    TbAssert("host:port", IsValidAddress("srv:3390", "host:port") && !IsValidAddress("srv:70000", "host:port"))
+    TbAssert("url", IsValidAddress("http://10.0.0.1:8080/admin", "url") && IsValidAddress("printer.lan/status", "url")
+        && !IsValidAddress('x/"&calc', "url"))
+
+    ; --- background runner: result arrives via callback, UI thread free ---
+    result := ""
+    gotCode := -99
+    OnDone(out, code, timedOut) {
+        result := out, gotCode := code
+    }
+    RunCaptureAsync("echo async-ok", OnDone)
+    t0 := A_TickCount
+    while result = "" && A_TickCount - t0 < 10000
+        Sleep(50)  ; timers (the poller) run during Sleep
+    TbAssert("async capture", InStr(result, "async-ok") && gotCode = 0)
+
+    timedOutFlag := ""
+    OnSlow(out, code, timedOut) {
+        timedOutFlag := timedOut
+    }
+    t0 := A_TickCount
+    RunCaptureAsync("ping -n 30 127.0.0.1", OnSlow, "smoke slow task", 800)
+    while timedOutFlag = "" && A_TickCount - t0 < 10000
+        Sleep(50)
+    TbAssert("async timeout kills task", timedOutFlag = true && A_TickCount - t0 < 6000)
+
+    ; --- download integrity ---
+    TbAssert("signature valid (MS-signed)", VerifySignature(A_WinDir "\explorer.exe", "Microsoft Corporation") = "")
+    unsigned := A_Temp "\toolbox_smoke_unsigned.txt"
+    Try FileDelete(unsigned)
+    FileAppend("abc", unsigned, "UTF-8-RAW")
+    TbAssert("signature missing rejected", VerifySignature(unsigned, "Microsoft Corporation") != "")
+    TbAssert("signature wrong signer rejected", InStr(VerifySignature(A_WinDir "\explorer.exe", "Evil Corp"), "someone else"))
+    Try FileDelete(unsigned)
+    sums := "f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d  yt-dlp.exe`n"
+          . "0000000000000000000000000000000000000000000000000000000000000000  yt-dlp_x86.exe`n"
+    TbAssert("sums parse", SumFor(sums, "yt-dlp.exe") = "F5389D3698ECDE4EF06F4E6B1CE0294FE9AC1396228C8990B8D3416D6D177A7D")
+    TbAssert("sums exact name", SumFor(sums, "yt-dlp") = "" && SumFor(sums, "dlp.exe") = "")
+    cat4 := BuildToolCatalog(A_ScriptDir "\..\catalog.json")
+    TbAssert("catalog integrity fields", cat4["procexp64.exe"].signer = "Microsoft Corporation" && InStr(cat4["yt-dlp.exe"].sums, "SHA2-256SUMS"))
+}
+
+; An exception inside a test group is a FAIL line, never an error dialog
+; (a dialog would block CI until the job timeout, and pops up locally).
+RunGroup(fn) {
+    try
+        fn()
+    catch as err
+        TbAssert("exception in " fn.Name ": " err.Message " (line " err.Line ")", false)
+}
+OnError((err, mode) => (TbAssert("uncaught: " err.Message " (line " err.Line ")", false), 1))  ; 1 = no dialog
+
+RunGroup(RunTests)
+RunGroup(RunTests2)
+RunGroup(RunTests3)
+RunGroup(RunTests4)
 FileAppend(fails = 0 ? "ALL OK" : fails " FAILURES", outFile)
 ExitApp()

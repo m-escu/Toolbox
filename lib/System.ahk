@@ -15,14 +15,9 @@ ToggleWifi() {
     }
     wifiAdapter := m[1], status := m[2]
     ; Status is Up / Disconnected / Disabled — only "Disabled" means switched off
-    if status = "Disabled" {
-        Run('cmd /k netsh interface set interface "' wifiAdapter '" enable')
-        ToolTip(wifiAdapter " enabled")
-    } else {
-        Run('cmd /k netsh interface set interface "' wifiAdapter '" disable')
-        ToolTip(wifiAdapter " disabled")
-    }
-    SetTimer(() => ToolTip(), -2000)
+    action := (status = "Disabled") ? "enable" : "disable"
+    Run('cmd /k netsh interface set interface "' wifiAdapter '" ' action)
+    Notify(wifiAdapter " " action "d", 2000)
 }
 
 ; ============================================================
@@ -73,6 +68,18 @@ SysShutdown() {
         Run('cmd /k shutdown /s /t 0')
 }
 
+; --- Abort a pending (delayed) shutdown / restart ---
+; shutdown /a exits 1116 (ERROR_NO_SHUTDOWN_IN_PROGRESS) when nothing is pending
+SysAbortShutdown() {
+    out := Trim(RunCapture("shutdown /a", &rc), " `t`r`n")
+    if rc = 0
+        Notify("Pending shutdown / restart aborted.", 2500)
+    else if rc = 1116
+        Notify("No shutdown or restart is pending.", 2500)
+    else
+        MsgBox("shutdown /a failed (exit " rc "):`n`n" out, "Abort Shutdown", 48)
+}
+
 ; --- Kill process by name ---
 SysKillProcess() {
     if !RequireAdmin("Kill process...")
@@ -104,12 +111,7 @@ GetUnixEpoch() {
 GetLocalIps() {
     psLines := []
     psLines.Push('Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress -notlike "169.*" -and $_.IPAddress -ne "127.0.0.1"} | Select-Object -ExpandProperty IPAddress')
-    psScript := ""
-    for , line in psLines
-        psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_ips.ps1", psScript)
-    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
-    Try FileDelete(tmpPs)
+    output := PsCapture(psLines, "ips")
     return output
 }
 
@@ -127,11 +129,9 @@ CopyInfoItem(what) {
     }
     if text != "" {
         A_Clipboard := text
-        ToolTip("Copied: " StrReplace(text, "`n", "  "))
-        SetTimer(() => ToolTip(), -2500)
+        Notify("Copied: " StrReplace(text, "`n", "  "), 2500)
     } else {
-        ToolTip("Could not get info.")
-        SetTimer(() => ToolTip(), -2000)
+        Notify("Could not get info.", 2000)
     }
 }
 
@@ -143,13 +143,7 @@ SysUptimeDisk() {
     psLines.Push('Write-Host ("Uptime: {0}d {1:00}h {2:00}m" -f $up.Days, $up.Hours, $up.Minutes)')
     psLines.Push('Write-Host ""')
     psLines.Push('Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { $free=[math]::Round($_.FreeSpace/1GB,1); $total=[math]::Round($_.Size/1GB,1); Write-Host ("{0}  {1} GB free of {2} GB" -f $_.DeviceID, $free, $total) }')
-    psScript := ""
-    for , line in psLines
-        psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_uptime.ps1", psScript)
-    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
-    Try FileDelete(tmpPs)
-    MsgBox(output, "Uptime & Disk Space", 64)
+    PsCaptureAsync(psLines, "uptime", (output, *) => MsgBox(output, "Uptime & Disk Space", 64), "Uptime & Disk Space")
 }
 
 ; --- Recent event log errors ---
@@ -158,13 +152,7 @@ SysEventErrors() {
     psLines.Push('$ev = Get-WinEvent -FilterHashtable @{LogName="System"; Level=2} -MaxEvents 25 -ErrorAction SilentlyContinue')
     psLines.Push('if ($ev) { $ev | Format-Table -AutoSize TimeCreated, ProviderName, Id, @{N="Message";E={($_.Message -split "``r?``n")[0]}} | Out-String -Width 250 }')
     psLines.Push('else { Write-Host "No error events found." }')
-    psScript := ""
-    for , line in psLines
-        psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_events.ps1", psScript)
-    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
-    Try FileDelete(tmpPs)
-    ShowText("Event Log Errors (System)", output)
+    PsShowAsync(psLines, "events", "Event Log Errors (System)")
 }
 
 ; --- Reduce working set of running processes (free RAM) ---
@@ -184,13 +172,7 @@ SysReduceWorkingSet() {
     psLines.Push('$after = & $getAvail')
     psLines.Push('Write-Host ("Trimmed: {0} process(es), skipped: {1} (access denied)" -f $trimmed, $skipped)')
     psLines.Push('Write-Host ("Free RAM: {0} GB -> {1} GB  ({2:+0.00;-0.00} GB)" -f $before, $after, ($after - $before))')
-    psScript := ""
-    for , line in psLines
-        psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_trimmem.ps1", psScript)
-    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
-    Try FileDelete(tmpPs)
-    MsgBox(output, "Reduce Working Set", 64)
+    PsCaptureAsync(psLines, "trimmem", (output, *) => MsgBox(output, "Reduce Working Set", 64), "Reduce Working Set")
 }
 
 ; --- Clean temp folder (delete contents of %TEMP%, skip in-use files) ---
@@ -210,13 +192,7 @@ SysCleanTemp() {
     psLines.Push('$freed = [math]::Round(($before - $after)/1MB, 1)')
     psLines.Push('Write-Host ("Removed: {0} item(s), skipped: {1} (in use / access denied)" -f $removed, $skipped)')
     psLines.Push('Write-Host ("Freed: {0} MB" -f $freed)')
-    psScript := ""
-    for , line in psLines
-        psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_cleantemp.ps1", psScript)
-    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
-    Try FileDelete(tmpPs)
-    MsgBox(output, "Clean Temp Folder", 64)
+    PsCaptureAsync(psLines, "cleantemp", (output, *) => MsgBox(output, "Clean Temp Folder", 64), "Clean Temp Folder")
 }
 
 ; Subsequence fuzzy match: every needle char must appear in order.
@@ -235,7 +211,7 @@ FuzzyScore(needle, hay) {
 
 ; ============================================================
 ; PS-BASED SYSTEM INFO TOOLS
-; Same recipe as the Network.ahk info tools: psLines -> PsCapture()
+; Same recipe as the Network.ahk info tools: psLines -> PsShowAsync()
 ; -> ShowText() into the themed console. See the quoting cheat-sheet
 ; at the top of the Network.ahk section.
 ; ============================================================
@@ -256,7 +232,7 @@ SysInfoSummary() {
     psLines.Push('Get-CimInstance Win32_VideoController | ForEach-Object { Write-Host ("GPU:      {0}  (driver {1})" -f $_.Name, $_.DriverVersion) }')
     psLines.Push('$up = (Get-Date) - $os.LastBootUpTime')
     psLines.Push('Write-Host ("Uptime:   {0}d {1:00}h {2:00}m" -f $up.Days, $up.Hours, $up.Minutes)')
-    ShowText("System Info", PsCapture(psLines, "sysinfo"))
+    PsShowAsync(psLines, "sysinfo", "System Info")
 }
 
 ; --- Startup programs: startup folders + registry Run keys ---
@@ -281,7 +257,7 @@ SysStartupItems() {
     psLines.Push('    if ($p.Name -notmatch "^PS") { Write-Host ("  " + $p.Name + "  =  " + $p.Value) }')
     psLines.Push('  }')
     psLines.Push('}')
-    ShowText("Startup Programs", PsCapture(psLines, "startup"))
+    PsShowAsync(psLines, "startup", "Startup Programs")
 }
 
 ; --- Top processes by memory and by CPU time ---
@@ -296,7 +272,7 @@ SysTopProcesses() {
     psLines.Push('Get-Process | Where-Object { $_.CPU } | Sort-Object CPU -Descending | Select-Object -First 10 | ForEach-Object {')
     psLines.Push('  Write-Host ("{0,-32} {1,10:N1} s" -f $_.ProcessName, $_.CPU)')
     psLines.Push('}')
-    ShowText("Top Processes", PsCapture(psLines, "topproc"))
+    PsShowAsync(psLines, "topproc", "Top Processes")
 }
 
 ; --- Running services ---
@@ -306,7 +282,7 @@ SysRunningServices() {
     psLines.Push('$s | Format-Table Status, Name, DisplayName -AutoSize | Out-String -Width 160')
     psLines.Push('Write-Host ""')
     psLines.Push('Write-Host ("{0} running service(s) of {1} total." -f ($s | Measure-Object).Count, (Get-Service | Measure-Object).Count)')
-    ShowText("Running Services", PsCapture(psLines, "services"))
+    PsShowAsync(psLines, "services", "Running Services")
 }
 
 ; --- Installed applications (from the registry uninstall keys) ---
@@ -323,7 +299,7 @@ SysInstalledApps() {
     psLines.Push('$apps | Format-Table -AutoSize | Out-String -Width 200')
     psLines.Push('Write-Host ""')
     psLines.Push('Write-Host ("Total: {0} entr(ies)." -f ($apps | Measure-Object).Count)')
-    ShowText("Installed Applications", PsCapture(psLines, "apps"))
+    PsShowAsync(psLines, "apps", "Installed Applications")
 }
 
 ; --- Windows updates (hotfixes) history ---
@@ -333,7 +309,7 @@ SysUpdateHistory() {
     psLines.Push('$hf | Format-Table HotFixID, Description, InstalledOn -AutoSize | Out-String -Width 100')
     psLines.Push('Write-Host ""')
     psLines.Push('Write-Host ("{0} update(s) on record." -f ($hf | Measure-Object).Count)')
-    ShowText("Windows Update History", PsCapture(psLines, "updates"))
+    PsShowAsync(psLines, "updates", "Windows Update History")
 }
 
 ; --- Disk health: SMART-style status, temperature, SSD wear ---
@@ -351,7 +327,7 @@ SysDiskHealth() {
     psLines.Push('  } catch { Write-Host "         (reliability counters need admin rights)" }')
     psLines.Push('  Write-Host ""')
     psLines.Push('}')
-    ShowText("Disk Health (SMART)", PsCapture(psLines, "disk"))
+    PsShowAsync(psLines, "disk", "Disk Health (SMART)")
 }
 
 ; --- Battery status + full HTML battery report (opens in browser) ---
@@ -371,7 +347,7 @@ SysBattery() {
     psLines.Push('$rep = Join-Path $env:TEMP "toolbox_battery_report.html"')
     psLines.Push('powercfg /batteryreport /output $rep | Out-Null')
     psLines.Push('if (Test-Path $rep) { Write-Host ""; Write-Host ("Full report opened: " + $rep); Start-Process $rep }')
-    ShowText("Battery Status", PsCapture(psLines, "battery"))
+    PsShowAsync(psLines, "battery", "Battery Status")
 }
 
 ; --- Display & GPU info (driver, resolution, connected monitors) ---
@@ -391,7 +367,7 @@ SysGpuInfo() {
     psLines.Push('    Write-Host ("  " + $mfr + " " + $name)')
     psLines.Push('  }')
     psLines.Push('} catch { Write-Host "  (monitor info not available)" }')
-    ShowText("Display & GPU", PsCapture(psLines, "gpu"))
+    PsShowAsync(psLines, "gpu", "Display & GPU")
 }
 
 ; --- Installed printers (default one marked) ---
@@ -402,7 +378,7 @@ SysPrinters() {
     psLines.Push('  $tag = if ($_.Name -eq $def) { "  [default]" } else { "" }')
     psLines.Push('  Write-Host ($_.Name + $tag)')
     psLines.Push('}')
-    ShowText("Installed Printers", PsCapture(psLines, "printers"))
+    PsShowAsync(psLines, "printers", "Installed Printers")
 }
 
 ; --- Power plans: pick one from a popup menu and activate it ---
@@ -433,8 +409,7 @@ ApplyPowerPlan(choice, plans) {
         return
     p := plans[idx]
     RunCapture("powercfg /setactive " p.guid)
-    ToolTip("Power plan: " p.name)
-    SetTimer(() => ToolTip(), -2000)
+    Notify("Power plan: " p.name, 2000)
 }
 
 ; --- Windows activation status ---
@@ -452,7 +427,7 @@ SysActivation() {
     psLines.Push('  Write-Host ("Status:  {0}" -f $names[[int]$x.LicenseStatus])')
     psLines.Push('  Write-Host ("Channel: {0}" -f $x.ProductKeyChannel)')
     psLines.Push('}')
-    ShowText("Windows Activation", PsCapture(psLines, "activation"))
+    PsShowAsync(psLines, "activation", "Windows Activation")
 }
 
 ; --- Copy the OEM BIOS product key (empty on retail/digital licenses) ---
@@ -465,8 +440,7 @@ SysCopyProductKey() {
         return
     }
     A_Clipboard := output
-    ToolTip("Product key copied: " output)
-    SetTimer(() => ToolTip(), -3000)
+    Notify("Product key copied: " output, 3000)
 }
 
 ; --- Open the Environment Variables editor directly ---

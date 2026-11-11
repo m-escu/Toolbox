@@ -15,8 +15,7 @@ RequireAdmin(commandLabel) {
         return true
     elevate := IniRead(favoritesFile, "Settings", "ElevateMode", "warn")
     if (elevate = "auto") {
-        ToolTip("Relaunching Toolbox as admin...")
-        SetTimer(() => ToolTip(), -2000)
+        Notify("Relaunching Toolbox as admin...", 2000)
         try {
             ; Resume via a command-line arg: UAC-elevated processes get a fresh
             ; environment, so an env var would not survive the relaunch.

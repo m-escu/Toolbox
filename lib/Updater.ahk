@@ -11,20 +11,24 @@ BuildToolCatalog(jsonFile := "") {
     if jsonFile = ""
         jsonFile := A_ScriptDir "\catalog.json"
     if !FileExist(jsonFile) {
-        ToolTip("catalog.json not found — updater disabled")
-        SetTimer(() => ToolTip(), -3000)
+        Notify("catalog.json not found — updater disabled", 3000)
         return cat
     }
     try {
         root := JsonParse(FileRead(jsonFile, "UTF-8"))
         for , t in root["tools"] {
-            info := {name: t["name"], suite: t["suite"], url: t["url"], exes: t["exes"], direct: t.Has("direct") ? t["direct"] : ""}
+            ; optional integrity fields: signer (Authenticode publisher every
+            ; binary must be validly signed by), sha256sums (URL of a
+            ; "<sha256>  <file>" list the download must match)
+            info := {name: t["name"], suite: t["suite"], url: t["url"], exes: t["exes"]
+                , direct: t.Has("direct") ? t["direct"] : ""
+                , signer: t.Has("signer") ? t["signer"] : ""
+                , sums: t.Has("sha256sums") ? t["sha256sums"] : ""}
             for , e in info.exes
                 cat[StrLower(e)] := info
         }
     } catch as err {
-        ToolTip("catalog.json parse error: " err.Message)
-        SetTimer(() => ToolTip(), -4000)
+        Notify("catalog.json parse error: " err.Message, 4000)
     }
     return cat
 }
@@ -187,6 +191,66 @@ HttpGetChangeToken(url) {
     }
 }
 
+; ---- integrity checks (run BEFORE anything is written into Tools\) ----
+; Each returns "" when the file passes, else the reason it was rejected.
+
+; Valid Authenticode signature whose certificate subject names `signer`
+VerifySignature(path, signer) {
+    psLines := ['$s = Get-AuthenticodeSignature -LiteralPath ' PsQuote(path)
+        , 'Write-Output ("{0}|{1}" -f $s.Status, $s.SignerCertificate.Subject)']
+    out := Trim(PsCapture(psLines, "sigcheck"), " `t`r`n")
+    if !RegExMatch(out, "^(\w+)\|(.*)$", &m)
+        return "signature check failed: " out
+    if m[1] != "Valid"
+        return "signature " m[1] " (expected a valid " signer " signature)"
+    if !InStr(m[2], "O=" signer)
+        return "signed by someone else: " m[2]
+    return ""
+}
+
+; SHA-256 of `path` must equal the entry for `fileName` in the sums file
+VerifySha256Sums(path, sumsUrl, fileName) {
+    try {
+        req := ComObject("WinHttp.WinHttpRequest.5.1")
+        req.SetTimeouts(5000, 5000, 10000, 10000)
+        req.Open("GET", sumsUrl, false)
+        req.Send()
+        if req.Status != 200
+            return "checksum list: HTTP " req.Status
+        sums := req.ResponseText
+    } catch as err {
+        return "checksum list download failed: " err.Message
+    }
+    expected := SumFor(sums, fileName)
+    if expected = ""
+        return "no checksum for " fileName " in the published list"
+    actual := HashFile(path, "SHA256")
+    if actual != expected
+        return "SHA-256 mismatch (got " SubStr(actual, 1, 12) "…, expected " SubStr(expected, 1, 12) "…)"
+    return ""
+}
+
+; "<sha256>  <name>" / "<sha256> *<name>" (sha256sum format) -> uppercase hash, or ""
+SumFor(sums, fileName) {
+    return RegExMatch(sums, "im)^([0-9a-f]{64})\s+\*?" RegExEscape(fileName) "\s*$", &m) ? StrUpper(m[1]) : ""
+}
+
+RegExEscape(s) {
+    return RegExReplace(s, "[\\.*?+\[\]{}()^$|]", "\$0")
+}
+
+VerifyDownload(path, fileName, info) {
+    if info.sums != "" {
+        if (err := VerifySha256Sums(path, info.sums, fileName)) != ""
+            return err
+    }
+    if info.signer != "" {
+        if (err := VerifySignature(path, info.signer)) != ""
+            return err
+    }
+    return ""
+}
+
 ; Download a catalog tool, install binaries to Tools\, cleanup.
 ; Direct-download entries (info.direct) skip the zip/extract path.
 ; Returns "" on success, error text on failure.
@@ -196,12 +260,31 @@ DownloadAndInstallTool(exeName, info) {
         dst := A_ScriptDir "\Tools\" info.direct
         if !DirExist(A_ScriptDir "\Tools")
             DirCreate(A_ScriptDir "\Tools")
+        ; Download next to the target, then swap it in: a failed or partial
+        ; download must not destroy the working copy.
+        part := dst ".download"
+        Try FileDelete(part)
         try {
-            Download(info.url, dst)
+            Download(info.url, part)
         } catch as err {
+            Try FileDelete(part)
             return "download failed: " err.Message
         }
-        return FileExist(dst) ? "" : "download failed (empty)"
+        if !FileExist(part) || FileGetSize(part) = 0 {
+            Try FileDelete(part)
+            return "download failed (empty)"
+        }
+        if (bad := VerifyDownload(part, info.direct, info)) != "" {
+            Try FileDelete(part)
+            return "REJECTED — " bad
+        }
+        try {
+            FileMove(part, dst, 1)
+        } catch as err {
+            Try FileDelete(part)
+            return "could not replace " info.direct " (in use?): " err.Message
+        }
+        return ""
     }
 
     tmpZip := A_Temp "\toolbox_tool.zip"
@@ -218,17 +301,12 @@ DownloadAndInstallTool(exeName, info) {
         return "download failed (empty)"
 
     ; Extract via PowerShell (handles nested x64 folders)
-    psScript := 'Expand-Archive -LiteralPath "' tmpZip '" -DestinationPath "' tmpDir '" -Force'
-    tmpPs := WriteTempPs("toolbox_unzip.ps1", psScript)
-    RunWait('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"', , "Hide")
-    Try FileDelete(tmpPs)
+    unzipOut := PsCapture(['Expand-Archive -LiteralPath ' PsQuote(tmpZip) ' -DestinationPath ' PsQuote(tmpDir) ' -Force'], "unzip")
     if !DirExist(tmpDir)
-        return "extract failed"
+        return "extract failed" (Trim(unzipOut) != "" ? ": " Trim(unzipOut) : "")
 
-    ; Copy each catalog binary (search recursively — NirSoft nests x64)
-    if !DirExist(A_ScriptDir "\Tools")
-        DirCreate(A_ScriptDir "\Tools")
-    copied := 0
+    ; Find each catalog binary (search recursively — NirSoft nests x64)
+    found := []
     for , want in info.exes {
         best := ""
         Loop Files tmpDir "\*.*", "R" {
@@ -240,11 +318,27 @@ DownloadAndInstallTool(exeName, info) {
                     best := A_LoopFilePath
             }
         }
-        if best != "" {
-            try {
-                FileCopy(best, A_ScriptDir "\Tools\" want, 1)
-                copied++
-            }
+        if best != ""
+            found.Push({src: best, name: want})
+    }
+
+    ; Verify every binary BEFORE touching Tools\ — one bad file rejects the
+    ; whole package, so a tampered zip can't leave half its files installed
+    for , f in found {
+        if (bad := VerifyDownload(f.src, f.name, info)) != "" {
+            Try FileDelete(tmpZip)
+            Try DirDelete(tmpDir, true)
+            return "REJECTED " f.name " — " bad
+        }
+    }
+
+    if !DirExist(A_ScriptDir "\Tools")
+        DirCreate(A_ScriptDir "\Tools")
+    copied := 0
+    for , f in found {
+        try {
+            FileCopy(f.src, A_ScriptDir "\Tools\" f.name, 1)
+            copied++
         }
     }
 
@@ -398,8 +492,7 @@ ToolUpdater() {
             Sleep(50)
         }
         upg.Opt("-Disabled")
-        ToolTip("Update finished: " done " ok, " failed " failed")
-        SetTimer(() => ToolTip(), -3000)
+        Notify("Update finished: " done " ok, " failed " failed", 3000)
     }
     upg.AddButton("xm y+10 w160 h32", "&Update checked").OnEvent("Click", DoUpdate)
     allBtn := ""
@@ -507,8 +600,7 @@ ToolBrowseCatalog() {
             if MsgBox(msg, "Tool Catalog", 52) = "Yes"
                 Reload()
         } else {
-            ToolTip(msg)
-            SetTimer(() => ToolTip(), -3000)
+            Notify(msg, 3000)
         }
     }
     brw.AddButton("xm y+10 w160 h32", "&Install checked").OnEvent("Click", DoInstall)
@@ -541,9 +633,11 @@ RegisterToolInIni(label, exeName) {
 }
 
 ; Join array of strings with separator
+; (separator only BETWEEN items — RTrim(out, sep) would also eat trailing
+; separator characters that belong to the last item)
 StrJoin(arr, sep) {
     out := ""
-    for , s in arr
-        out .= s sep
-    return RTrim(out, sep)
+    for i, s in arr
+        out .= (i > 1 ? sep : "") s
+    return out
 }

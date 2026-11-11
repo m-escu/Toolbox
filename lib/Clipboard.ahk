@@ -1,116 +1,81 @@
 ; ============================================================
 ; CLIPBOARD COMMANDS
+; Each command = a pure text function (testable, see tests/Smoke.ahk)
+; + a thin Clip* wrapper that reads/writes the clipboard and notifies.
 ; ============================================================
 
-; --- Remove duplicate lines ---
-ClipRemoveDuplicates() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
-        return
-    }
+; Clipboard text, or "" (with a tooltip) when it's empty
+ClipTextOrNotify() {
+    text := A_Clipboard
+    if text = ""
+        Notify("Clipboard is empty.", 2000)
+    return text
+}
 
-    lines := StrSplit(A_Clipboard, "`n", "`r")
+; --- Remove duplicate lines ---
+; Compares trimmed lines, keeps the first occurrence with its original
+; whitespace; blank lines are dropped.
+DedupeLines(text, &removed := 0) {
+    lines := StrSplit(text, "`n", "`r")
     seen := Map()
     unique := []
-
     for line in lines {
         trimmed := Trim(line)
         if trimmed = "" || seen.Has(trimmed)
             continue
         seen[trimmed] := true
-        unique.Push(line)  ; keep original (with original whitespace/indent)
+        unique.Push(line)
     }
-
-    originalCount := lines.Length
-    result := ""
-    for line in unique
-        result .= line "`n"
-    result := RTrim(result, "`n")
-
-    A_Clipboard := result
-    removed := originalCount - unique.Length
-    if removed > 0
-        ToolTip("Removed " removed " duplicate(s) — " unique.Length " line(s) remain")
-    else
-        ToolTip("No duplicates found — " unique.Length " line(s)")
-    SetTimer(() => ToolTip(), -2000)
+    removed := lines.Length - unique.Length
+    return StrJoin(unique, "`n")
 }
 
-; --- Sort lines ---
+ClipRemoveDuplicates() {
+    if (text := ClipTextOrNotify()) = ""
+        return
+    A_Clipboard := result := DedupeLines(text, &removed)
+    remain := StrSplit(result, "`n").Length
+    Notify(removed > 0 ? "Removed " removed " duplicate(s) — " remain " line(s) remain"
+                       : "No duplicates found — " remain " line(s)", 2000)
+}
+
+; --- Sort lines (case-insensitive; built-in Sort) ---
+SortLines(text, descending := false) {
+    text := StrReplace(RTrim(text, "`r`n"), "`r`n", "`n")
+    return Sort(text, descending ? "R" : "")
+}
+
 ClipSortLines(descending := false) {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
+    if (text := ClipTextOrNotify()) = ""
         return
-    }
-
-    arr := StrSplit(RTrim(A_Clipboard, "`r`n"), "`n", "`r")
-    n := arr.Length
-
-    ; Build a parallel array of lowercase keys for case-insensitive sort
-    keys := []
-    for i, line in arr
-        keys.Push(StrLower(line))
-
-    ; Selection sort (O(n^2) but no bubble sort hang risk on large data)
-    loop n - 1 {
-        best := A_Index
-        loop n - A_Index {
-            j := A_Index + best
-            a := keys[best]
-            b := keys[j]
-            if (descending ? (b > a) : (b < a))
-                best := j
-        }
-        if best != A_Index {
-            ; Swap both arrays
-            tmp := arr[A_Index], arr[A_Index] := arr[best], arr[best] := tmp
-            tmp := keys[A_Index], keys[A_Index] := keys[best], keys[best] := tmp
-        }
-    }
-
-    result := ""
-    for line in arr
-        result .= line "`n"
-    A_Clipboard := RTrim(result, "`n")
-
-    dir := descending ? "Z-A" : "A-Z"
-    ToolTip("Sorted " n " lines (" dir ")")
-    SetTimer(() => ToolTip(), -1500)
+    A_Clipboard := result := SortLines(text, descending)
+    Notify("Sorted " StrSplit(result, "`n").Length " lines (" (descending ? "Z-A" : "A-Z") ")")
 }
 
-; --- URL encode (UTF-8 safe) ---
+; --- URL encode (RFC 3986 unreserved chars kept, everything else %XX of
+; the UTF-8 bytes). Encoding the whole string at once keeps surrogate
+; pairs (emoji) intact — per-character encoding split them in two.
+UrlEncode(text) {
+    n := StrPut(text, "UTF-8") - 1
+    buf := Buffer(Max(n, 1))
+    StrPut(text, buf, "UTF-8")
+    out := ""
+    loop n {
+        b := NumGet(buf, A_Index - 1, "UChar")
+        if (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+            || b = 0x2D || b = 0x2E || b = 0x5F || b = 0x7E  ; - . _ ~
+            out .= Chr(b)
+        else
+            out .= "%" Format("{:02X}", b)
+    }
+    return out
+}
+
 ClipUrlEncode() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
+    if (text := ClipTextOrNotify()) = ""
         return
-    }
-    encoded := ""
-    for i, char in StrSplit(A_Clipboard) {
-        code := Ord(char)
-        if (code >= 48 && code <= 57)    ; 0-9
-            || (code >= 65 && code <= 90)   ; A-Z
-            || (code >= 97 && code <= 122)  ; a-z
-            || char = "-" || char = "_" || char = "." || char = "~"
-            encoded .= char
-        else if code < 128 {
-            ; Single-byte ASCII
-            encoded .= "%" Format("{:02X}", code)
-        } else {
-            ; Multi-byte UTF-8: encode each byte
-            buf := Buffer(8)
-            wbuf := Buffer(4, 0)
-            NumPut("UShort", Ord(char) & 0xFFFF, wbuf, 0)
-            nBytes := DllCall("WideCharToMultiByte", "UInt", 65001, "UInt", 0, "Ptr", wbuf.Ptr, "Int", 1, "Ptr", buf.Ptr, "Int", buf.Size, "Ptr", 0, "Ptr", 0)
-            loop nBytes
-                encoded .= "%" Format("{:02X}", NumGet(buf, A_Index - 1, "UChar"))
-        }
-    }
-    A_Clipboard := encoded
-    ToolTip("URL encoded (UTF-8) — pasted to clipboard")
-    SetTimer(() => ToolTip(), -1500)
+    A_Clipboard := UrlEncode(text)
+    Notify("URL encoded (UTF-8) — pasted to clipboard")
 }
 
 ; --- Base64 encode (Crypt32, UTF-8 safe) ---
@@ -140,30 +105,21 @@ B64DecodeText(b64) {
 }
 
 ClipBase64Encode() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
+    if (text := ClipTextOrNotify()) = ""
         return
-    }
-    try A_Clipboard := B64EncodeText(A_Clipboard)
+    try A_Clipboard := B64EncodeText(text)
     catch as err
         return ClipBase64Fail(err.Message)
-    ToolTip("Base64 encoded — pasted to clipboard")
-    SetTimer(() => ToolTip(), -1500)
+    Notify("Base64 encoded — pasted to clipboard")
 }
 
-; --- Base64 decode (Crypt32) ---
 ClipBase64Decode() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
+    if (text := ClipTextOrNotify()) = ""
         return
-    }
-    try A_Clipboard := B64DecodeText(A_Clipboard)
+    try A_Clipboard := B64DecodeText(text)
     catch as err
         return ClipBase64Fail(err.Message)
-    ToolTip("Base64 decoded — pasted to clipboard")
-    SetTimer(() => ToolTip(), -1500)
+    Notify("Base64 decoded — pasted to clipboard")
 }
 
 ClipBase64Fail(msg) {
@@ -184,104 +140,92 @@ ClipInsertTimestamp(format) {
             ts := FormatTime(now)
     }
     A_Clipboard := ts
-    ToolTip("Timestamp: " ts)
-    SetTimer(() => ToolTip(), -1500)
+    Notify("Timestamp: " ts)
 }
 
 ; --- Strip HTML formatting ---
-ClipStripHtml() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
-        return
-    }
-    text := A_Clipboard
-    text := RegExReplace(text, "<br\s*/?>", "`n")
+; &amp; is decoded LAST: decoding it first would turn "&amp;lt;" (the
+; literal text "&lt;") into "<".
+HtmlToText(text) {
+    text := RegExReplace(text, "i)<br\s*/?>", "`n")
     text := RegExReplace(text, "<[^>]+>", "")
-    text := RegExReplace(text, "&nbsp;", " ")
-    text := RegExReplace(text, "&amp;", "&")
-    text := RegExReplace(text, "&lt;", "<")
-    text := RegExReplace(text, "&gt;", ">")
-    text := RegExReplace(text, "&quot;", '"')
-    text := RegExReplace(text, "&#(\d+);", m => Chr(Integer(m[1])))
-    text := RegExReplace(text, "[ \t]+", " ")
-    A_Clipboard := text
-    ToolTip("HTML stripped — " StrLen(text) " chars")
-    SetTimer(() => ToolTip(), -1500)
+    text := StrReplace(text, "&nbsp;", " ")
+    text := StrReplace(text, "&lt;", "<")
+    text := StrReplace(text, "&gt;", ">")
+    text := StrReplace(text, "&quot;", '"')
+    text := StrReplace(text, "&#39;", "'")
+    text := DecodeNumericEntities(text)
+    text := StrReplace(text, "&amp;", "&")
+    return RegExReplace(text, "[ \t]+", " ")
+}
+
+; &#65; / &#x41; -> "A". A loop, because AHK v2's RegExReplace takes no
+; callback function (passing one throws — Strip HTML used to always fail).
+DecodeNumericEntities(text) {
+    out := "", pos := 1
+    while found := RegExMatch(text, "i)&#(x[0-9a-f]{1,6}|\d{1,7});", &m, pos) {
+        out .= SubStr(text, pos, found - pos)
+        v := m[1]
+        code := (SubStr(v, 1, 1) = "x") ? Integer("0x" SubStr(v, 2)) : Integer(v)
+        out .= (code > 0 && code <= 0x10FFFF) ? Chr(code) : m[0]  ; invalid: keep as-is
+        pos := found + m.Len
+    }
+    return out SubStr(text, pos)
+}
+
+ClipStripHtml() {
+    if (text := ClipTextOrNotify()) = ""
+        return
+    A_Clipboard := result := HtmlToText(text)
+    Notify("HTML stripped — " StrLen(result) " chars")
 }
 
 ; --- Trim each line ---
 ClipTrimLines() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
+    if (text := ClipTextOrNotify()) = ""
         return
-    }
-    lines := StrSplit(A_Clipboard, "`n", "`r")
-    result := ""
-    for line in lines
-        result .= Trim(line) "`n"
-    A_Clipboard := RTrim(result, "`n")
-    ToolTip("Trimmed " lines.Length " line(s)")
-    SetTimer(() => ToolTip(), -1500)
+    lines := StrSplit(text, "`n", "`r")
+    for i, line in lines
+        lines[i] := Trim(line)
+    A_Clipboard := StrJoin(lines, "`n")
+    Notify("Trimmed " lines.Length " line(s)")
 }
 
 ; --- Count chars / words / lines ---
 ClipCountStats() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
+    if (text := ClipTextOrNotify()) = ""
         return
-    }
-    chars := StrLen(A_Clipboard)
-    lines := StrSplit(A_Clipboard, "`n", "`r").Length
+    chars := StrLen(text)
+    lines := StrSplit(text, "`n", "`r").Length
     words := 0
     pos := 1
-    while RegExMatch(A_Clipboard, "\S+", &m, pos) {
+    while RegExMatch(text, "\S+", &m, pos) {
         words++
         pos := m.Pos + m.Len
     }
     MsgBox("Clipboard Statistics:`n`n  Lines:   " lines "`n  Words:   " words "`n  Chars:   " chars, "Clipboard Stats", 64)
 }
 
-; --- SHA-256 hash of the clipboard text (result copied to clipboard) ---
-; The text is written to a temp file and Get-FileHash hashes that exact
-; byte stream — this avoids newline-encoding surprises and matches what
-; any other SHA-256 tool would report for the same content.
+; --- SHA-256 of the clipboard text (UTF-8 bytes), result copied ---
 ClipHashText() {
-    if A_Clipboard = "" {
-        ToolTip("Clipboard is empty.")
-        SetTimer(() => ToolTip(), -2000)
+    if (text := ClipTextOrNotify()) = ""
         return
-    }
-    tmpFile := A_Temp "\toolbox_cliphash.txt"
-    Try FileDelete(tmpFile)
-    FileAppend(A_Clipboard, tmpFile, "UTF-8-RAW")
-    ; Quote chars as data — the -Command argument is wrapped in ", the
-    ; file path in ' (same lexer-proof pattern as RunTempPsVisible).
-    dq := '"'
-    sq := "'"
-    cmd := "powershell -NoProfile -Command " dq "(Get-FileHash -LiteralPath " sq StrReplace(tmpFile, sq, sq sq) sq " -Algorithm SHA256).Hash" dq
-    hash := Trim(RunCapture(cmd))
-    Try FileDelete(tmpFile)
-    if !RegExMatch(hash, "i)^[0-9A-F]{64}$") {
-        MsgBox("Hash failed:`n" hash, "Clipboard Hash", 48)
+    try hash := HashText(text, "SHA256")
+    catch as err {
+        MsgBox("Hash failed:`n" err.Message, "Clipboard Hash", 48)
         return
     }
     A_Clipboard := hash
-    ToolTip("SHA-256 copied: " SubStr(hash, 1, 24) "...")
-    SetTimer(() => ToolTip(), -3000)
+    Notify("SHA-256 copied: " SubStr(hash, 1, 24) "...", 3000)
 }
 
 ; --- Generate a random GUID (v4) and copy it ---
 ClipNewGuid() {
-    g := Trim(RunCapture('powershell -NoProfile -Command "[guid]::NewGuid().ToString()"'))
-    if RegExMatch(g, "i)^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$") {
-        A_Clipboard := g
-        ToolTip("GUID copied: " g)
-        SetTimer(() => ToolTip(), -2500)
-    } else {
-        MsgBox("Could not generate a GUID:`n" g, "Generate GUID", 48)
+    try g := NewGuid()
+    catch as err {
+        MsgBox("Could not generate a GUID:`n" err.Message, "Generate GUID", 48)
+        return
     }
+    A_Clipboard := g
+    Notify("GUID copied: " g, 2500)
 }
-

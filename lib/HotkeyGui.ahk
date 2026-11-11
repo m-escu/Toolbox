@@ -93,13 +93,11 @@ ShowHotkeyEditor() {
     AddOrUpdate() {
         hk := Trim(edHK.Value), target := Trim(edTarget.Value)
         if hk = "" || target = "" {
-            ToolTip("Both hotkey and target are required.")
-            SetTimer(() => ToolTip(), -3000)
+            Notify("Both hotkey and target are required.", 3000)
             return
         }
         if FriendlyToHk(hk) = "" {
-            ToolTip("Cannot parse hotkey: " hk)
-            SetTimer(() => ToolTip(), -4000)
+            Notify("Cannot parse hotkey: " hk, 4000)
             return
         }
         ; update by target first (changing a hotkey = replace, not new row),
@@ -190,8 +188,7 @@ ShowHotkeyEditor() {
             IniWrite(c.target, favoritesFile, "Hotkeys", c.hk)
         g.Destroy()
         ApplyHotkeys()
-        ToolTip("Hotkeys saved & applied.")
-        SetTimer(() => ToolTip(), -3000)
+        Notify("Hotkeys saved & applied.", 3000)
     }
 
     ProbeFailed(msg) {
@@ -206,20 +203,12 @@ ShowHotkeyEditor() {
 ; Sorted list of registered command labels for the target dropdown
 GetRegisteredCommandNames() {
     global commandRegistry
-    names := []
+    if commandRegistry.Count = 0
+        return []
+    text := ""
     for label in commandRegistry  ; Map iteration yields keys (command labels)
-        names.Push(label)
-    ; insertion sort (Array has no built-in Sort)
-    i := 1
-    while i < names.Length {
-        j := i
-        while j > 0 && StrCompare(names[j], names[j + 1]) > 0 {
-            tmp := names[j], names[j] := names[j + 1], names[j + 1] := tmp
-            j--
-        }
-        i++
-    }
-    return names
+        text .= (text = "" ? "" : "`n") label
+    return StrSplit(Sort(text), "`n")  ; built-in Sort: case-insensitive by default
 }
 
 ; Dark-theme the dropdown list + edit part of a ComboBox (ApplyDarkTheme

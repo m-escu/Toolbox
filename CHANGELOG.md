@@ -1,6 +1,22 @@
 # Changelog
 
 ## Unreleased
+- Info tools run in the background (`PsShowAsync` / `RunCaptureAsync`): hotkeys and menus stay responsive, a "Running: … (N s)" tooltip lists active tasks, a 120 s timeout kills the whole process tree
+- Palette: prefix > word-start > substring > initials ranking, recent commands boosted (and listed first when the filter is empty), second column with section · hotkey · [admin]; only one palette at a time
+- Updater integrity: Sysinternals binaries must carry a valid Microsoft Authenticode signature and yt-dlp must match the release's `SHA2-256SUMS` before anything is written to `Tools\` (catalog fields `signer` / `sha256sums`); direct downloads go to a temp file first, so a failed update keeps the working copy
+- New: System → Abort pending shutdown / restart (`shutdown /a`)
+- Browse to device: choose https:// or http:// (or type the scheme)
+- Input validation: ping / traceroute / nslookup / SSH (`user@host`) / RDP (`host:port`) / browse / port check reject malformed addresses before running or saving them; routes validate destination, mask (dotted or `/N`, host bits checked), gateway and metric, and check admin before prompting
+- Port check: 3 s connect timeout (was ~21 s per filtered port), reports OPEN / CLOSED / FILTERED / DNS failure
+- DHCP switch also removes the static default route and resets DNS servers (IPv6 untouched)
+- Static IP: failures are shown as such and not saved as a profile (netsh exit code); DNS-only warnings flagged separately
+- Fix: Strip HTML always threw (AHK v2's `RegExReplace` takes no callback); `&amp;` now decoded last; hex entities supported
+- Fix: URL encode garbled emoji (surrogate pairs); Wake-on-LAN no longer saves invalid MACs
+- Clipboard hash, file hash, GUID and password generator use CNG / COM directly (no PowerShell window, no modulo bias); file hashing streams in 1 MB chunks
+- yt-dlp batch starts with `chcp 65001` (non-ASCII URLs/paths on older cmd builds)
+- Console: status timer can't hit a closed window; per-control color maps are pruned
+- Internals: `Notify()` replaces ~30 ToolTip+SetTimer pairs, one `OnWmCtlColor` handler instead of four, `IsDarkMode()` cached (was INI + registry read per paint message), shared `PsWrite`/`PsQuote`/`AskAddress`/`CopySelectedFiles`/`GetActiveExplorerPath`, built-in `Sort()`, `StrJoin` no longer eats trailing separator chars
+- Smoke tests: 86 (round trips for hotkeys and menu layout, palette ranking, address validation, async runner incl. timeout kill, signature/checksum checks); exceptions are reported as FAIL lines instead of blocking dialogs
 - Fix: subnet calculator always reported "Invalid IP or mask" (input was split per character); now accepts `IP MASK`, `IP /N` and `IP/N`, rejects non-contiguous masks — logic moved to pure `SubnetCalc()`
 - Fix: Windows activation status always said "Could not query" (the licensing query line was missing)
 - Fix: Toggle Wi-Fi never found the adapter (`Get-NetAdapter -InterfaceType` doesn't exist); now detects the 802.11 adapter, and a disconnected-but-enabled adapter is no longer treated as "on"

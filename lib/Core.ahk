@@ -9,21 +9,225 @@
 ; the child fills the pipe we are NOT reading (~4 KB of PowerShell errors on
 ; stderr is enough). cmd's "> file 2>&1" has no pipes, so it cannot deadlock.
 ; Caveat: the line goes through cmd, so a literal %NAME% in it is expanded.
-RunCapture(cmd) {
+; exitCode (optional, by ref): the command's exit code, -1 if it couldn't run.
+RunCapture(cmd, &exitCode := 0) {
     static runCount := 0
     runCount += 1
     capFile := A_Temp "\toolbox_cap" DllCall("GetCurrentProcessId") "_" runCount ".txt"
     output := ""
     try {
         ; /S: strip exactly the outer quote pair, keep every inner quote as-is
-        RunWait(A_ComSpec ' /S /C "' cmd ' > "' capFile '" 2>&1"', , "Hide")
+        exitCode := RunWait(A_ComSpec ' /S /C "' cmd ' > "' capFile '" 2>&1"', , "Hide")
         if FileExist(capFile)
             output := FileRead(capFile, "CP" DllCall("GetOEMCP", "UInt"))  ; console output is OEM codepage
     } catch as err {
+        exitCode := -1
         output := "Error: " err.Message
     }
     try FileDelete(capFile)
     return output
+}
+
+; ---- Background (non-blocking) capture ----
+; Same hidden "> file 2>&1" trick as RunCapture, but without waiting: the
+; command runs while hotkeys/menus stay responsive. A timer polls the
+; process; meanwhile tooltip #2 lists what's running ("Notify" uses #1).
+; onDone(output, exitCode, timedOut) is called once, on the main thread.
+; On timeout the whole process tree (cmd + PowerShell + children) is killed.
+global gRunningTasks := Map()   ; task id -> {label, start}
+
+RunCaptureAsync(cmd, onDone, label := "", timeoutMs := 120000) {
+    static taskCount := 0
+    global gRunningTasks
+    taskCount += 1
+    id := taskCount
+    capFile := A_Temp "\toolbox_acap" DllCall("GetCurrentProcessId") "_" id ".txt"
+    cmdPid := 0
+    try Run(A_ComSpec ' /S /C "' cmd ' > "' capFile '" 2>&1"', , "Hide", &cmdPid)
+    catch as err {
+        onDone("Error: " err.Message, -1, false)
+        return
+    }
+    ; SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION: wait + read exit code
+    hProc := DllCall("OpenProcess", "UInt", 0x00101000, "Int", 0, "UInt", cmdPid, "Ptr")
+    start := A_TickCount
+    if label != ""
+        gRunningTasks[id] := {label: label, start: start}
+
+    Poll() {
+        done := !hProc || DllCall("WaitForSingleObject", "Ptr", hProc, "UInt", 0, "UInt") = 0
+        timedOut := false
+        if !done && (A_TickCount - start) > timeoutMs {
+            RunWait('taskkill /T /F /PID ' cmdPid, , "Hide")
+            timedOut := done := true
+        }
+        if !done {
+            RefreshRunningTip()
+            return
+        }
+        SetTimer(Poll, 0)
+        code := -1
+        if hProc {
+            DllCall("GetExitCodeProcess", "Ptr", hProc, "UInt*", &code)
+            DllCall("CloseHandle", "Ptr", hProc)
+        }
+        output := ""
+        try output := FileRead(capFile, "CP" DllCall("GetOEMCP", "UInt"))
+        try FileDelete(capFile)
+        if gRunningTasks.Has(id)
+            gRunningTasks.Delete(id)
+        RefreshRunningTip()
+        onDone(output, code, timedOut)
+    }
+    SetTimer(Poll, 150)
+}
+
+; Tooltip #2: one line per running background task, with elapsed seconds.
+; Short tasks (< 0.5 s) never show it.
+RefreshRunningTip() {
+    global gRunningTasks
+    text := ""
+    for , t in gRunningTasks {
+        secs := (A_TickCount - t.start) // 1000
+        if (A_TickCount - t.start) >= 500
+            text .= (text = "" ? "" : "`n") "Running: " t.label "  (" secs " s)"
+    }
+    if text = ""
+        ToolTip(, , , 2)
+    else
+        ToolTip(text, , , 2)
+}
+
+; PsCapture, non-blocking: onDone(output, exitCode, timedOut)
+PsCaptureAsync(psLines, name, onDone, label := "", timeoutMs := 120000) {
+    tmpPs := PsWrite(psLines, name)
+    Finish(output, code, timedOut) {
+        Try FileDelete(tmpPs)
+        onDone(output, code, timedOut)
+    }
+    RunCaptureAsync('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"', Finish, label, timeoutMs)
+}
+
+; The common case: run an info script in the background, show the result
+; in the output console when it's done (title doubles as the task label).
+PsShowAsync(psLines, name, title, timeoutMs := 120000) {
+    Show(output, code, timedOut) {
+        if timedOut
+            output .= "`n`n[Stopped: no result after " timeoutMs // 1000 " s]"
+        ShowText(title, output)
+    }
+    PsCaptureAsync(psLines, name, Show, title, timeoutMs)
+}
+
+; Short status tooltip that clears itself. One shared timer: a newer message
+; restarts it, so an older timer can't clear the newer tooltip early.
+Notify(msg, ms := 1500) {
+    static clearFn := () => ToolTip()
+    ToolTip(msg)
+    SetTimer(clearFn, -ms)
+}
+
+; ---- CNG (bcrypt.dll) helpers: hashing + crypto RNG, no PowerShell ----
+; algo: "SHA256" | "SHA1" | "MD5" (CNG algorithm ids). Returns uppercase hex.
+BcryptCheck(status, what) {
+    if status != 0
+        throw Error(what " failed (NTSTATUS 0x" Format("{:08X}", status & 0xFFFFFFFF) ")")
+}
+
+BcryptBegin(algo) {
+    hAlg := 0, hHash := 0, digestLen := 0, cb := 0
+    BcryptCheck(DllCall("bcrypt\BCryptOpenAlgorithmProvider", "Ptr*", &hAlg, "WStr", algo, "Ptr", 0, "UInt", 0, "UInt"), "BCryptOpenAlgorithmProvider")
+    DllCall("bcrypt\BCryptGetProperty", "Ptr", hAlg, "WStr", "HashDigestLength", "UInt*", &digestLen, "UInt", 4, "UInt*", &cb, "UInt", 0, "UInt")
+    st := DllCall("bcrypt\BCryptCreateHash", "Ptr", hAlg, "Ptr*", &hHash, "Ptr", 0, "UInt", 0, "Ptr", 0, "UInt", 0, "UInt", 0, "UInt")
+    if st != 0 {
+        DllCall("bcrypt\BCryptCloseAlgorithmProvider", "Ptr", hAlg, "UInt", 0)
+        BcryptCheck(st, "BCryptCreateHash")
+    }
+    return {alg: hAlg, hash: hHash, len: digestLen}
+}
+
+BcryptUpdate(h, ptr, size) {
+    BcryptCheck(DllCall("bcrypt\BCryptHashData", "Ptr", h.hash, "Ptr", ptr, "UInt", size, "UInt", 0, "UInt"), "BCryptHashData")
+}
+
+BcryptFinish(h) {
+    out := Buffer(h.len)
+    BcryptCheck(DllCall("bcrypt\BCryptFinishHash", "Ptr", h.hash, "Ptr", out, "UInt", h.len, "UInt", 0, "UInt"), "BCryptFinishHash")
+    hex := ""
+    loop h.len
+        hex .= Format("{:02X}", NumGet(out, A_Index - 1, "UChar"))
+    return hex
+}
+
+BcryptClose(h) {
+    DllCall("bcrypt\BCryptDestroyHash", "Ptr", h.hash)
+    DllCall("bcrypt\BCryptCloseAlgorithmProvider", "Ptr", h.alg, "UInt", 0)
+}
+
+; Hash text as its UTF-8 bytes (no BOM) — same bytes any other tool sees
+HashText(text, algo := "SHA256") {
+    n := StrPut(text, "UTF-8") - 1
+    buf := Buffer(Max(n, 1))
+    StrPut(text, buf, "UTF-8")
+    h := BcryptBegin(algo)
+    try {
+        BcryptUpdate(h, buf, n)
+        return BcryptFinish(h)
+    } finally
+        BcryptClose(h)
+}
+
+; Hash a file in 1 MB chunks (constant memory, works on multi-GB files)
+HashFile(path, algo := "SHA256") {
+    f := FileOpen(path, "r")
+    if !f
+        throw Error("cannot open file")
+    h := BcryptBegin(algo)
+    try {
+        buf := Buffer(1 << 20)
+        while (n := f.RawRead(buf, buf.Size)) > 0
+            BcryptUpdate(h, buf, n)
+        return BcryptFinish(h)
+    } finally {
+        f.Close()
+        BcryptClose(h)
+    }
+}
+
+; Fill a Buffer with cryptographically secure random bytes
+RandomBytes(n) {
+    buf := Buffer(n)
+    BcryptCheck(DllCall("bcrypt\BCryptGenRandom", "Ptr", 0, "Ptr", buf, "UInt", n, "UInt", 2, "UInt"), "BCryptGenRandom")  ; 2 = BCRYPT_USE_SYSTEM_PREFERRED_RNG
+    return buf
+}
+
+; Random string over an alphabet, without modulo bias: bytes >= the largest
+; multiple of the alphabet size are thrown away and redrawn.
+RandomString(len, alphabet) {
+    k := StrLen(alphabet)
+    limit := 256 - Mod(256, k)
+    out := ""
+    while StrLen(out) < len {
+        buf := RandomBytes(len * 2)
+        loop buf.Size {
+            b := NumGet(buf, A_Index - 1, "UChar")
+            if b < limit
+                out .= SubStr(alphabet, Mod(b, k) + 1, 1)
+            if StrLen(out) = len
+                break
+        }
+    }
+    return out
+}
+
+; New random GUID, lowercase, no braces (CoCreateGuid = v4 random)
+NewGuid() {
+    g := Buffer(16)
+    if DllCall("ole32\CoCreateGuid", "Ptr", g) != 0
+        throw Error("CoCreateGuid failed")
+    s := Buffer(39 * 2)
+    DllCall("ole32\StringFromGUID2", "Ptr", g, "Ptr", s, "Int", 39)
+    return StrLower(Trim(StrGet(s, "UTF-16"), "{}"))
 }
 
 ; Show command output. Reads [Settings] OutputMode:
@@ -63,25 +267,36 @@ WriteTempPs(name, content) {
     return tmpPs
 }
 
-; The standard pattern for all the new "show me info" tools:
+; The standard pattern for all the "show me info" tools:
 ;   1. build an array of PowerShell lines   psLines := [] / psLines.Push('...')
-;   2. run it hidden and capture stdout     output := PsCapture(psLines, "name")
-;   3. display it                           ShowText("Title", output)  -> themed console
-; Steps 1-2 used to be copy-pasted 6 lines per tool; this helper does the
-; join + write + run + capture + cleanup in one call. The static runCount
-; makes every temp file unique, so two tools can run at the same time
-; without overwriting each other's .ps1 (CleanupOldTemp removes leftovers
-; on the next Toolbox start).
+;   2. run it in the background + display   PsShowAsync(psLines, "name", "Title")
+; PsCapture is the blocking variant (returns the output) for callers that
+; need the result right away. Temp file names are unique (PsWrite), so two
+; tools can run at the same time; CleanupOldTemp removes leftovers on the
+; next Toolbox start.
 PsCapture(psLines, name := "ps") {
+    tmpPs := PsWrite(psLines, name)
+    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
+    Try FileDelete(tmpPs)
+    return output
+}
+
+; Same idea for the scripts that run in a VISIBLE window: join + write the
+; lines to a unique temp .ps1 and return its path for RunTempPsVisible().
+PsWrite(psLines, name := "ps") {
     static runCount := 0
     runCount += 1
     psScript := ""
     for , line in psLines
         psScript .= line "`n"
-    tmpPs := WriteTempPs("toolbox_" name runCount ".ps1", psScript)
-    output := RunCapture('powershell -NoProfile -ExecutionPolicy Bypass -File "' tmpPs '"')
-    Try FileDelete(tmpPs)
-    return output
+    return WriteTempPs("toolbox_" name runCount ".ps1", psScript)
+}
+
+; Quote a value as a PowerShell single-quoted literal ('it''s' style) —
+; safe for adapter names, paths, URLs: nothing inside gets expanded.
+PsQuote(s) {
+    sq := "'"
+    return sq StrReplace(s, sq, sq sq) sq
 }
 
 ; Remove leftover toolbox_* temp files from previous runs
@@ -206,6 +421,66 @@ ParseMask(maskStr) {
     return IpToInt(maskStr)
 }
 
+; ---- Address validation for user input that lands on a command line ----
+; Accepts an IPv4 address, an IPv6 literal or a DNS name. Anything with
+; quotes, spaces or shell characters (& | ^ < >) fails, so it can't break
+; out of the quoted argument it is placed in.
+IsValidHost(s) {
+    if s = ""
+        return false
+    if RegExMatch(s, "^[\d.]+$")              ; all digits/dots: must be real IPv4
+        return IpToInt(s) >= 0
+    if RegExMatch(s, "^[0-9A-Fa-f:]+(%[\w.-]+)?$") && StrLen(s) - StrLen(StrReplace(s, ":")) >= 2
+        return true                           ; IPv6 literal (optional %zone)
+    return RegExMatch(s, "^(?=.{1,253}$)[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
+        . "(?:\.[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*\.?$") > 0
+}
+
+; kind: "host" | "user@host" (SSH, user optional) | "host:port" (port
+; optional) | "url" (host[:port][/path], for the browser)
+IsValidAddress(s, kind := "host") {
+    switch kind {
+        case "user@host":
+            if RegExMatch(s, "^([\w.-]+)@(.+)$", &m)
+                s := m[2]
+            return IsValidHost(s)
+        case "host:port":
+            if RegExMatch(s, "^([^:]+):(\d{1,5})$", &m)
+                return IsValidHost(m[1]) && Integer(m[2]) >= 1 && Integer(m[2]) <= 65535
+            return IsValidHost(s)
+        case "url":  ; [http(s)://]host[:port][/path]
+            s := RegExReplace(s, "i)^https?://")
+            if !RegExMatch(s, "^([^/\s`"'<>|^&]+)(/[^\s`"'<>|^]*)?$", &m)
+                return false
+            return IsValidAddress(m[1], "host:port")
+    }
+    return IsValidHost(s)
+}
+
+; Prompt for an address with the shared [AddressFavorites] quick-pick,
+; validate it, and only then remember it. Re-prompts (pre-filled) on bad
+; input. Returns "" when cancelled.
+AskAddress(prompt, title, kind := "host", boxOpts := "w500 h320") {
+    favs := LoadFavorites("AddressFavorites")
+    fullPrompt := prompt "`n" FormatFavoritesPrompt(favs, "Recent addresses: ")
+    value := ""
+    loop {
+        r := TbInputBox(fullPrompt, title, boxOpts, value)
+        if r.Result != "OK" || Trim(r.Value) = ""
+            return ""
+        value := Trim(ResolveInput(r.Value, favs))
+        if IsValidAddress(value, kind) {
+            AddFavorite(value, "AddressFavorites")
+            return value
+        }
+        hint := kind = "user@host" ? "an IP or hostname, optionally user@host"
+              : kind = "host:port" ? "an IP or hostname, optionally :port"
+              : kind = "url" ? "an IP or hostname, optionally :port and /path"
+              : "an IP address or hostname"
+        MsgBox("'" value "' is not valid.`n`nExpected " hint ".", title, 48)
+    }
+}
+
 ; Parse "IP MASK", "IP /N" or "IP/N" and compute the subnet. Pure — no GUI.
 ; Returns {ok: true, ip, mask, cidr, network, broadcast, hosts} (ints), or
 ; {ok: false, error: "..."}.
@@ -288,10 +563,18 @@ GetFileListFromClipboard() {
 ; ============================================================
 ; THEME HELPERS: Windows Dark Mode detection, WM_CTLCOLOR hooks & Dark InputBox
 ; ============================================================
-global darkBgBrush := 0
-global darkCtlBrush := 0
-
+; Called from every WM_CTLCOLOR* paint message, so the INI + registry
+; lookup is cached briefly (a system theme switch still shows up within 2 s).
 IsDarkMode() {
+    static cached := false, cachedTick := 0
+    if cachedTick && (A_TickCount - cachedTick) < 2000
+        return cached
+    cached := ReadDarkModeSetting()
+    cachedTick := A_TickCount
+    return cached
+}
+
+ReadDarkModeSetting() {
     global favoritesFile
     themeOpt := IniRead(favoritesFile, "Settings", "Theme", "auto")
     if (themeOpt = "dark")
@@ -304,14 +587,6 @@ IsDarkMode() {
     } catch {
         return false
     }
-}
-
-InitDarkBrushes() {
-    global darkBgBrush, darkCtlBrush
-    if !darkBgBrush
-        darkBgBrush := DllCall("gdi32\CreateSolidBrush", "UInt", 0x1F1F1F, "Ptr")
-    if !darkCtlBrush
-        darkCtlBrush := DllCall("gdi32\CreateSolidBrush", "UInt", 0x2B2B2B, "Ptr")
 }
 
 ; ============================================================
@@ -374,6 +649,36 @@ OnWmNotify(wParam, lParam, msg, hwnd) {
     }
 }
 
+; Drop a window's controls from the per-control color + dark-header maps.
+; Call before Destroy(): window handles are recycled, so a stale entry
+; would paint some unrelated future control with these colors.
+ForgetGuiColors(guiObj) {
+    global gCtlColors, gDarkHeaders
+    for , ctrl in guiObj {
+        try {
+            gCtlColors.Delete(ctrl.Hwnd)
+        }
+        try {
+            if ctrl.Type = "ListView"
+                gDarkHeaders.Delete(SendMessage(0x101F, 0, 0, ctrl.Hwnd))  ; LVM_GETHEADER
+        }
+    }
+}
+
+; Remove entries whose window no longer exists (GUIs closed without
+; ForgetGuiColors — most dialogs just Destroy()). Run when registering.
+PruneDeadColorEntries() {
+    global gCtlColors, gDarkHeaders
+    for , m in [gCtlColors, gDarkHeaders] {
+        dead := []
+        for hwnd in m
+            if !DllCall("IsWindow", "Ptr", hwnd)
+                dead.Push(hwnd)
+        for , hwnd in dead
+            m.Delete(hwnd)
+    }
+}
+
 ; Give one control exact fg/bg colors at paint time (BGR COLORREFs).
 ; Works for Text, read-only Edit (WM_CTLCOLORSTATIC) and Edit (WM_CTLCOLOREDIT).
 SetCtlColors(hwnd, fg, bk) {
@@ -386,76 +691,35 @@ EnsureCtlColorHooks() {
     static done := false
     if done
         return
-    OnMessage(0x0138, OnWmCtlColorStatic)  ; WM_CTLCOLORSTATIC
-    OnMessage(0x0133, OnWmCtlColorEdit)    ; WM_CTLCOLOREDIT
-    OnMessage(0x0135, OnWmCtlColorBtn)     ; WM_CTLCOLORBTN
-    OnMessage(0x0134, OnWmCtlColorListbox) ; WM_CTLCOLORLISTBOX (combo dropdowns)
+    for msgId in [0x0133, 0x0134, 0x0135, 0x0138]  ; WM_CTLCOLOREDIT/LISTBOX/BTN/STATIC
+        OnMessage(msgId, OnWmCtlColor)
     OnMessage(0x004E, OnWmNotify)          ; WM_NOTIFY (dark header custom draw)
     done := true
 }
 
-; Dark paint for listboxes incl. ComboBox dropped lists — the dropdown
-; popup is a separate top-level window, so SetWindowTheme alone is not
-; enough; this hook supplies its background/text brushes.
-OnWmCtlColorListbox(wParam, lParam, msg, hwnd) {
-    global gCtlColors, darkCtlBrush
+; One handler for all four WM_CTLCOLOR* messages. Per-control colors
+; (SetCtlColors) win; otherwise, in dark mode, a per-message default.
+; LISTBOX also covers ComboBox dropped lists — that popup is a separate
+; top-level window, so SetWindowTheme alone doesn't darken it.
+; Brushes come from ThemeBrush(): they must outlive the message.
+OnWmCtlColor(wParam, lParam, msg, hwnd) {
+    global gCtlColors
+    static defaults := Map(                    ; msg -> [text, background] (BGR)
+        0x0133, [0x00FFFFFF, 0x002B2B2B],      ; EDIT
+        0x0134, [0x00FFFFFF, 0x002B2B2B],      ; LISTBOX
+        0x0135, [0x00FFFFFF, 0x001F1F1F],      ; BTN
+        0x0138, [0x00E0E0E0, 0x001F1F1F])      ; STATIC (Text, read-only Edit)
     if gCtlColors.Has(lParam) {
         c := gCtlColors[lParam]
-        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
-        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
-        return ThemeBrush(c.bk)
+        fg := c.fg, bk := c.bk
+    } else {
+        if !IsDarkMode()
+            return
+        fg := defaults[msg][1], bk := defaults[msg][2]
     }
-    if !IsDarkMode()
-        return
-    DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00FFFFFF)
-    DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", 0x002B2B2B)
-    return darkCtlBrush
-}
-
-OnWmCtlColorStatic(wParam, lParam, msg, hwnd) {
-    global darkBgBrush, gCtlColors
-    ; per-control exact colors win first (registered via SetCtlColors)
-    if gCtlColors.Has(lParam) {
-        c := gCtlColors[lParam]
-        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
-        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
-        return ThemeBrush(c.bk)
-    }
-    if !IsDarkMode()
-        return
-    DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00E0E0E0)
-    DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", 0x001F1F1F)
-    return darkBgBrush
-}
-
-OnWmCtlColorEdit(wParam, lParam, msg, hwnd) {
-    global darkCtlBrush, gCtlColors
-    if gCtlColors.Has(lParam) {
-        c := gCtlColors[lParam]
-        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
-        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
-        return ThemeBrush(c.bk)
-    }
-    if !IsDarkMode()
-        return
-    DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00FFFFFF)
-    DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", 0x002B2B2B)
-    return darkCtlBrush
-}
-
-OnWmCtlColorBtn(wParam, lParam, msg, hwnd) {
-    global darkBgBrush, gCtlColors
-    if gCtlColors.Has(lParam) {
-        c := gCtlColors[lParam]
-        DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", c.fg)
-        DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", c.bk)
-        return ThemeBrush(c.bk)
-    }
-    if !IsDarkMode()
-        return
-    DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", 0x00FFFFFF)
-    DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", 0x001F1F1F)
-    return darkBgBrush
+    DllCall("gdi32\SetTextColor", "Ptr", wParam, "UInt", fg)
+    DllCall("gdi32\SetBkColor", "Ptr", wParam, "UInt", bk)
+    return ThemeBrush(bk)
 }
 
 ; Set a top-level Gui window's titlebar/taskbar icon (Gui has no SetIcon).
@@ -496,7 +760,7 @@ ApplyDarkTheme(guiObj, bgColor := "") {
     global THEME_TEXT
     if !IsDarkMode()
         return
-    InitDarkBrushes()
+    PruneDeadColorEntries()  ; keep the maps from filling with closed GUIs' hwnds
     if (bgColor = "")
         bgColor := "1F1F1F"
     guiObj.BackColor := bgColor
