@@ -69,7 +69,6 @@ RebuildRecentMenu() {
         return
     }
     for i, r in recents {
-        num := Mod(i - 1, 9) + 1  ; cycle 1-9 for keyboard nav
         display := (i <= 9) ? "&" i ". " r : r  ; only prefix first 9 with number
         if commandRegistry.Has(r)
             recentMenu.Add(display, CreateRecentCallback(r))

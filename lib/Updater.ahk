@@ -148,11 +148,12 @@ JsonParse(text) {
         }
     }
     ParseNumber() {
-        m := RegExMatch(text, "-?\d+(\.\d+)?", &m, pos)
-        if !m
+        ; (the old "m := RegExMatch(..., &m)" overwrote the match object with
+        ; the position, so any numeric value threw; also it wasn't anchored)
+        if !RegExMatch(text, "-?\d+(\.\d+)?([eE][+-]?\d+)?", &nm, pos) || nm.Pos != pos
             throw Error("Unexpected character at " pos ": '" SubStr(text, pos, 1) "'")
-        pos := m.Pos + m.Len
-        return InStr(m[0], ".") ? Number(m[0]) : Integer(m[0])
+        pos := nm.Pos + nm.Len
+        return RegExMatch(nm[0], "[.eE]") ? Number(nm[0]) : Integer(nm[0])
     }
 }
 
@@ -203,7 +204,9 @@ VerifySignature(path, signer) {
         return "signature check failed: " out
     if m[1] != "Valid"
         return "signature " m[1] " (expected a valid " signer " signature)"
-    if !InStr(m[2], "O=" signer)
+    ; the organisation field must equal `signer` exactly ("O=Microsoft" must not
+    ; accept "O=Microsoft Corporation Ltd" or the reverse)
+    if !RegExMatch(m[2], "(?:^|, )O=" RegExEscape(signer) "(?:,|$)")
         return "signed by someone else: " m[2]
     return ""
 }

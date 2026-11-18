@@ -24,6 +24,16 @@ ToggleWifi() {
 ; NEW SYSTEM COMMANDS
 ; ============================================================
 
+; Delay in whole seconds from user text; -1 when invalid (blank, "5s", negative,
+; beyond shutdown.exe's 10-year limit). A typo must never mean "immediately".
+ParseDelaySeconds(text) {
+    text := Trim(text)
+    if !RegExMatch(text, "^\d{1,9}$")
+        return -1
+    secs := Integer(text)
+    return secs <= 315360000 ? secs : -1
+}
+
 ; --- Restart ---
 SysRestart() {
     if !RequireAdmin("Restart...")
@@ -31,7 +41,11 @@ SysRestart() {
     delay := TbInputBox("Restart delay in seconds (0 = immediate):", "Restart", "w350 h160", "0")
     if delay.Result != "OK"
         return
-    secs := RegExMatch(delay.Value, "^\d+$") ? Integer(delay.Value) : 0
+    secs := ParseDelaySeconds(delay.Value)
+    if secs < 0 {
+        MsgBox("Enter a whole number of seconds (0 = immediate).", "Restart", 48)
+        return
+    }
     ; Confirmation safeguard (INI-toggleable: ConfirmRestart in [Settings], default 1)
     confirm := IniRead(favoritesFile, "Settings", "ConfirmRestart", "1")
     if confirm = "1" {
@@ -40,10 +54,7 @@ SysRestart() {
         if result != "OK"
             return
     }
-    if secs > 0
-        Run('cmd /k shutdown /r /t ' secs)
-    else
-        Run('cmd /k shutdown /r /t 0')
+    Run('cmd /k shutdown /r /t ' secs)
 }
 
 ; --- Shutdown ---
@@ -53,7 +64,11 @@ SysShutdown() {
     delay := TbInputBox("Shutdown delay in seconds (0 = immediate):", "Shutdown", "w350 h160", "0")
     if delay.Result != "OK"
         return
-    secs := RegExMatch(delay.Value, "^\d+$") ? Integer(delay.Value) : 0
+    secs := ParseDelaySeconds(delay.Value)
+    if secs < 0 {
+        MsgBox("Enter a whole number of seconds (0 = immediate).", "Shutdown", 48)
+        return
+    }
     ; Confirmation safeguard (INI-toggleable: ConfirmShutdown in [Settings], default 1)
     confirm := IniRead(favoritesFile, "Settings", "ConfirmShutdown", "1")
     if confirm = "1" {
@@ -62,10 +77,7 @@ SysShutdown() {
         if result != "OK"
             return
     }
-    if secs > 0
-        Run('cmd /k shutdown /s /t ' secs)
-    else
-        Run('cmd /k shutdown /s /t 0')
+    Run('cmd /k shutdown /s /t ' secs)
 }
 
 ; --- Abort a pending (delayed) shutdown / restart ---
@@ -80,13 +92,24 @@ SysAbortShutdown() {
         MsgBox("shutdown /a failed (exit " rc "):`n`n" out, "Abort Shutdown", 48)
 }
 
+; Image name for taskkill /IM: letters, digits, space, . _ + ( ) * - only.
+; The value is placed inside quotes on an elevated command line, so quotes,
+; % (cmd expansion) and & | < > ^ must never get through.
+IsValidProcessName(s) {
+    return RegExMatch(s, "^[\w .+()*-]+$") > 0
+}
+
 ; --- Kill process by name ---
 SysKillProcess() {
     if !RequireAdmin("Kill process...")
         return
     input := TbInputBox("Enter process name (e.g. notepad.exe):", "Kill Process", "w400 h160")
-    if input.Result = "OK" && input.Value != "" {
+    if input.Result = "OK" && Trim(input.Value) != "" {
         procName := Trim(input.Value)
+        if !IsValidProcessName(procName) {
+            MsgBox("'" procName "' is not a valid process name.`n`nAllowed: letters, digits, space and . _ + ( ) * -", "Kill Process", 48)
+            return
+        }
         if !InStr(procName, ".")
             procName .= ".exe"
         ; RunCapture merges stderr — taskkill reports "not found" there

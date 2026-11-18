@@ -304,6 +304,59 @@ RunTests4() {
     TbAssert("catalog integrity fields", cat4["procexp64.exe"].signer = "Microsoft Corporation" && InStr(cat4["yt-dlp.exe"].sums, "SHA2-256SUMS"))
 }
 
+; Input hardening (static IP, process names, delays), JSON numbers, admin badge
+RunTests5() {
+    global favoritesFile, isAdmin
+
+    ; --- static IP input is validated before it reaches netsh ---
+    v := ValidateStaticIp("10.0.0.5, 10.0.0.6", "/24", "10.0.0.1", "8.8.8.8, 1.1.1.1")
+    TbAssert("static ip valid + normalized", v.ok && v.ips.Length = 2 && v.mask = "255.255.255.0" && v.gw = "10.0.0.1" && v.dns.Length = 2)
+    TbAssert("static ip gw/dns optional", ValidateStaticIp("10.0.0.5", "255.255.0.0", "", "").ok)
+    TbAssert("static ip injection rejected", !ValidateStaticIp('10.0.0.5" & calc & "', "/24", "", "").ok)
+    TbAssert("static ip bad mask rejected", !ValidateStaticIp("10.0.0.5", "255.0.255.0", "", "").ok)
+    TbAssert("static ip /0 rejected", !ValidateStaticIp("10.0.0.5", "/0", "", "").ok)
+    TbAssert("static ip bad gw rejected", !ValidateStaticIp("10.0.0.5", "/24", "10.0.0.999", "").ok)
+    TbAssert("static ip bad dns rejected", !ValidateStaticIp("10.0.0.5", "/24", "", "8.8.8.8 & calc").ok)
+    TbAssert("static ip empty rejected", !ValidateStaticIp("", "/24", "", "").ok)
+
+    ; --- shutdown delay: a typo is an error, not "immediately" ---
+    TbAssert("delay valid", ParseDelaySeconds("0") = 0 && ParseDelaySeconds(" 30 ") = 30)
+    TbAssert("delay invalid", ParseDelaySeconds("5s") = -1 && ParseDelaySeconds("") = -1 && ParseDelaySeconds("-1") = -1
+        && ParseDelaySeconds("1234567890") = -1 && ParseDelaySeconds("315360001") = -1)
+
+    ; --- taskkill image name ---
+    TbAssert("process name valid", IsValidProcessName("notepad.exe") && IsValidProcessName("chrome*.exe") && IsValidProcessName("My App.exe"))
+    TbAssert("process name injection rejected", !IsValidProcessName('x" & calc') && !IsValidProcessName("a%PATH%") && !IsValidProcessName("a|b"))
+
+    ; --- ssh user part can't be an option ---
+    TbAssert("ssh option-looking user rejected", !IsValidAddress("-J@10.0.0.1", "user@host") && IsValidAddress("_svc.01@10.0.0.1", "user@host"))
+
+    ; --- JSON numbers (the old ParseNumber threw on any number) ---
+    j := JsonParse('{"a": 12, "b": -3.5, "c": [1, 2e2], "d": true}')
+    TbAssert("json numbers", j["a"] = 12 && j["b"] = -3.5 && j["c"][2] = 200 && j["d"] = true)
+    threw := false
+    try JsonParse('{"a": x}')
+    catch
+        threw := true
+    TbAssert("json bad value throws", threw)
+
+    ; --- signer must match the O= field exactly ---
+    TbAssert("signature substring signer rejected", InStr(VerifySignature(A_WinDir "\explorer.exe", "Microsoft"), "someone else"))
+
+    ; --- [admin] badge follows the CURRENT elevation, never the saved layout ---
+    favoritesFile := A_Temp "\toolbox_smoke_badge.ini"
+    Try FileDelete(favoritesFile)
+    FileAppend("", favoritesFile)
+    BuildMenus()
+    TbAssert("layout value strips badge", LayoutValue({kind: "item", label: "&7. Flush DNS  [admin]", action: "Flush DNS"}) = "&7. Flush DNS|Flush DNS")
+    want := isAdmin ? "&7. Flush DNS" : "&7. Flush DNS  [admin]"
+    IniWrite("&7. Flush DNS  [admin]|Flush DNS", favoritesFile, "Menu", "Networking~1")
+    TbAssert("saved badge re-evaluated", GetLayoutItems("Networking")[1].label = want)
+    IniWrite("&7. Flush DNS|Flush DNS", favoritesFile, "Menu", "Networking~1")
+    TbAssert("missing badge re-added when needed", GetLayoutItems("Networking")[1].label = want)
+    Try FileDelete(favoritesFile)
+}
+
 ; An exception inside a test group is a FAIL line, never an error dialog
 ; (a dialog would block CI until the job timeout, and pops up locally).
 RunGroup(fn) {
@@ -318,5 +371,6 @@ RunGroup(RunTests)
 RunGroup(RunTests2)
 RunGroup(RunTests3)
 RunGroup(RunTests4)
+RunGroup(RunTests5)
 FileAppend(fails = 0 ? "ALL OK" : fails " FAILURES", outFile)
 ExitApp()

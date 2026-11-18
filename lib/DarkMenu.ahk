@@ -20,13 +20,16 @@ SetPreferredAppMode(option := "AllowDark") {
     option := StrUpper(option)
     if !modes.Has(option)
         option := "ALLOWDARK"
+    ; undocumented ordinals: absent on old Windows builds — then menus just stay light
     hModule := DllCall("kernel32.dll\GetModuleHandle", "str", "uxtheme.dll", "ptr")
-    fn := DllCall("kernel32.dll\GetProcAddress", "ptr", hModule, "ptr", 135, "ptr")
-    DllCall(fn, "int", modes[option])
+    fn := hModule ? DllCall("kernel32.dll\GetProcAddress", "ptr", hModule, "ptr", 135, "ptr") : 0
+    if fn
+        DllCall(fn, "int", modes[option])
 }
 
 FlushMenuThemes() {
     hModule := DllCall("kernel32.dll\GetModuleHandle", "str", "uxtheme.dll", "ptr")
-    fn := DllCall("kernel32.dll\GetProcAddress", "ptr", hModule, "ptr", 136, "ptr")
-    DllCall(fn)
+    fn := hModule ? DllCall("kernel32.dll\GetProcAddress", "ptr", hModule, "ptr", 136, "ptr") : 0
+    if fn
+        DllCall(fn)
 }

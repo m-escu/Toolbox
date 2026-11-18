@@ -220,6 +220,15 @@ ToolYtDlp() {
             urlEdit.Focus()
             return
         }
+        ; URLs are written inside "..." into a .bat: a double quote would end
+        ; the quoting and let the rest run as batch commands
+        for , u in urls {
+            if InStr(u, '"') {
+                MsgBox("This entry contains a double quote and can't be used:`n`n" u, "yt-dlp", 48)
+                urlEdit.Focus()
+                return
+            }
+        }
         folder := Trim(folderEdit.Value)
         if folder = ""
             folder := userProfile "\Downloads"

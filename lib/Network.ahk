@@ -106,11 +106,19 @@ ManualStaticForAdapter(chosenAdapter) {
 
 ; Actually apply the static IP(s) and save profile
 ApplyStaticIp(adapter, ip, mask, gw, dns) {
-    ips := ParseIpList(ip)
-    if ips.Length = 0 {
-        MsgBox("No IP address given.", "Set Static IP", 48)
+    ; Everything below lands on an elevated netsh command line: validate first
+    ; (saved profiles come from the INI, which anyone can edit).
+    v := ValidateStaticIp(ip, mask, gw, dns)
+    if !v.ok {
+        MsgBox(v.error, "Set Static IP", 48)
         return
     }
+    if RegExMatch(adapter, '["%]') {
+        MsgBox("Adapter name '" adapter "' contains a character that can't be passed safely to netsh.", "Set Static IP", 48)
+        return
+    }
+    ips := v.ips, mask := v.mask, gw := v.gw
+    ip := StrJoin(ips, ","), dns := StrJoin(v.dns, ",")
     output := ""
     rc := 0
     addrFailed := false
@@ -132,11 +140,17 @@ ApplyStaticIp(adapter, ip, mask, gw, dns) {
 
     ; DNS failures are reported separately: netsh also exits 1 when it merely
     ; can't reach the new server ("configured DNS server is incorrect"),
-    ; although the setting was applied.
+    ; although the setting was applied. netsh takes ONE server per "set dns";
+    ; the others are appended with "add dns ... index=N".
     dnsFailed := false
-    if dns != "" {
-        output .= RunCapture('netsh interface ip set dns "' adapter '" static ' dns, &rc) "`n"
+    if v.dns.Length > 0 {
+        output .= RunCapture('netsh interface ip set dns "' adapter '" static ' v.dns[1], &rc) "`n"
         dnsFailed := rc != 0
+        loop v.dns.Length - 1 {
+            output .= RunCapture('netsh interface ip add dns "' adapter '" ' v.dns[A_Index + 1] ' index=' (A_Index + 1), &rc) "`n"
+            if rc != 0
+                dnsFailed := true
+        }
     }
 
     ; Only remember profiles that actually applied
@@ -362,6 +376,12 @@ AskValidated(prompt, title, defaultVal, check) {
 NetRouteReset() {
     if !RequireAdmin("Reset routes")
         return
+    ; Asked AFTER the admin check (auto-elevate relaunches and resumes here).
+    ; 256 = second button (Cancel) is the default.
+    if MsgBox("This clears ALL routes (persistent ones too), resets Winsock and the TCP/IP stack, "
+        . "and flushes + re-registers DNS.`n`nThe network may drop and a reboot is needed.`n`nContinue?"
+        , "Reset routes", 49 + 256) != "OK"
+        return
     Run('cmd /k route -f && netsh winsock reset && netsh int ip reset && ipconfig /flushdns && ipconfig /registerdns && echo Routes reset complete. Reboot recommended. && pause')
 }
 
@@ -433,7 +453,7 @@ NetIpScanner() {
     if input.Result != "OK"
         return
     subnet := Trim(input.Value)
-    if !RegExMatch(subnet, "^(\d{1,3}\.){2}\d{1,3}$") {
+    if !RegExMatch(subnet, "^(\d{1,3}\.){2}\d{1,3}$") || IpToInt(subnet ".1") < 0 {  ; also rejects octets > 255
         MsgBox("Invalid subnet. Expected format: 192.168.1", "Scan Subnet", 48)
         return
     }

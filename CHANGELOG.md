@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- Security: static IP / mask / gateway / DNS are validated (`ValidateStaticIp`) before they reach the elevated `netsh` command line — also for saved INI profiles; Kill process validates the image name; yt-dlp rejects URLs containing `"`; SSH `user@host` can't start with `-`
+- Fix: multiple DNS servers in a static IP profile now work (`set dns` + `add dns index=N`; netsh rejects a comma list)
+- Fix: Restart / Shutdown with a typo'd delay ("5s", blank) no longer means "immediately" — it asks again
+- Reset routes asks for confirmation (it also resets Winsock + the TCP/IP stack) and defaults to Cancel
+- Fix: `JsonParse` threw on every numeric value (match object overwritten by the position) and wasn't anchored; exponents supported
+- Updater: the signing organisation must match exactly (`O=Microsoft` no longer accepts `O=Microsoft Corporation Ltd`)
+- Fix: the `[admin]` badge is no longer frozen into a saved menu layout — stripped on save/load and re-added only while not elevated (auto-elevate relaunch used to leave stale badges)
+- Subnet scanner rejects octets > 255; Dark menus no longer crash if the uxtheme ordinals are missing; small dead-code cleanups
+- Smoke tests: 105 (static IP validation, delay parsing, process names, JSON numbers, signer match, badge handling)
 - Info tools run in the background (`PsShowAsync` / `RunCaptureAsync`): hotkeys and menus stay responsive, a "Running: … (N s)" tooltip lists active tasks, a 120 s timeout kills the whole process tree
 - Palette: prefix > word-start > substring > initials ranking, recent commands boosted (and listed first when the filter is empty), second column with section · hotkey · [admin]; only one palette at a time
 - Updater integrity: Sysinternals binaries must carry a valid Microsoft Authenticode signature and yt-dlp must match the release's `SHA2-256SUMS` before anything is written to `Tools\` (catalog fields `signer` / `sha256sums`); direct downloads go to a temp file first, so a failed update keeps the working copy

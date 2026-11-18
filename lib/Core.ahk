@@ -441,7 +441,8 @@ IsValidHost(s) {
 IsValidAddress(s, kind := "host") {
     switch kind {
         case "user@host":
-            if RegExMatch(s, "^([\w.-]+)@(.+)$", &m)
+            ; user must start with a letter/digit: "-oOption@host" would be read as an ssh option
+            if RegExMatch(s, "^(\w[\w.-]*)@(.+)$", &m)
                 s := m[2]
             return IsValidHost(s)
         case "host:port":
@@ -479,6 +480,35 @@ AskAddress(prompt, title, kind := "host", boxOpts := "w500 h320") {
               : "an IP address or hostname"
         MsgBox("'" value "' is not valid.`n`nExpected " hint ".", title, 48)
     }
+}
+
+; Validate + normalize static-IP input BEFORE it is put on a netsh command
+; line (this runs elevated; an unchecked "&" would be a command injection).
+; ip / dns: comma-separated IPv4 lists; mask: dotted or /N; gw, dns optional.
+; Returns {ok: true, ips: [...], mask: "255.255.255.0", gw: "", dns: [...]}
+; or {ok: false, error: "..."}. Pure — no GUI.
+ValidateStaticIp(ip, mask, gw, dns) {
+    ips := ParseIpList(ip)
+    if ips.Length = 0
+        return {ok: false, error: "No IP address given."}
+    for , a in ips {
+        if IpToInt(a) < 0
+            return {ok: false, error: "'" a "' is not a valid IPv4 address."}
+    }
+    r := SubnetCalc(ips[1] " " Trim(mask))
+    if !r.ok
+        return {ok: false, error: r.error}
+    if r.cidr < 1
+        return {ok: false, error: "Mask /0 is not usable for a static address."}
+    gw := Trim(gw)
+    if gw != "" && IpToInt(gw) < 0
+        return {ok: false, error: "Gateway '" gw "' is not a valid IPv4 address."}
+    dnsList := ParseIpList(dns)
+    for , d in dnsList {
+        if IpToInt(d) < 0
+            return {ok: false, error: "DNS server '" d "' is not a valid IPv4 address."}
+    }
+    return {ok: true, ips: ips, mask: IntToIp(r.mask), gw: gw, dns: dnsList}
 }
 
 ; Parse "IP MASK", "IP /N" or "IP/N" and compute the subnet. Pure — no GUI.

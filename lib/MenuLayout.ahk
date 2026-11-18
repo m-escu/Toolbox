@@ -131,9 +131,30 @@ MergeNewDefaults(section, items, defaults) {
     return items
 }
 
+; "  [admin]" badge handling. The badge only means something for the CURRENT
+; elevation (Adm() adds it while NOT elevated), so it must never be frozen
+; into a saved layout: it is stripped on save and on load, then re-added on
+; load for the actions whose default label carries it.
+StripAdminBadge(label) {
+    return RegExReplace(label, "\s+\[admin\]$")
+}
+
+; action label -> true, for every default item currently showing the badge
+AdminBadgedActions() {
+    global sectionSpecs
+    badged := Map()
+    for , items in sectionSpecs {
+        for it in items {
+            if it.kind = "item" && InStr(it.label, "[admin]")
+                badged[it.action] := true
+        }
+    }
+    return badged
+}
+
 ; User layout if saved in INI (plus any defaults added since), else defaults
 GetLayoutItems(section) {
-    global favoritesFile
+    global favoritesFile, isAdmin
     ; action labels renamed when the "\\" typos were fixed (AHK has no
     ; backslash escapes, so "\\" was two backslashes) — keep old layouts working
     static legacyActions := Map("AppData\\Roaming", "AppData\Roaming", "AppData\\Local", "AppData\Local")
@@ -150,6 +171,7 @@ GetLayoutItems(section) {
     if vals.Length = 0
         return defaults
     items := []
+    badged := isAdmin ? Map() : AdminBadgedActions()
     for v in vals {
         v := Trim(v)
         if v = ""
@@ -161,12 +183,15 @@ GetLayoutItems(section) {
         p := InStr(v, "|")
         label := p ? Trim(SubStr(v, 1, p - 1)) : v
         action := p ? Trim(SubStr(v, p + 1)) : label
+        label := StripAdminBadge(label)
         if label = ""
             continue
         if legacyActions.Has(action) {
             action := legacyActions[action]
             label := StrReplace(label, "\\", "\")
         }
+        if badged.Has(action)
+            label .= "  [admin]"
         items.Push({kind: (action = "@") ? "sub" : "item", label: label, action: action})
     }
     return MergeNewDefaults(section, items, defaults)
@@ -255,7 +280,8 @@ SaveMenuLayout(models) {
 LayoutValue(it) {
     if it.kind = "sep"
         return "-"
+    label := StripAdminBadge(it.label)
     if it.kind = "sub"
-        return it.label "|@"
-    return (it.action = it.label) ? it.label : it.label "|" it.action
+        return label "|@"
+    return (it.action = label) ? label : label "|" it.action
 }

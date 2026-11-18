@@ -250,7 +250,7 @@ HkToFriendly(hk) {
     else if StrLen(key) = 1
         keyName := StrUpper(key)
     else
-        keyName := SubStr(key, 1, 1) SubStr(key, 2)  ; F5, NumpadAdd keep as typed
+        keyName := key  ; F5, NumpadAdd keep as typed
     return mods keyName
 }
 
